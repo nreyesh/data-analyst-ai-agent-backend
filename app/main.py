@@ -7,11 +7,14 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import text, func
 from sqlalchemy.orm import Session
 
 from backend.app.config import CONFIG
 from backend.app.database import engine, get_db
+from backend.app.models import UnitModel
+from backend.app.extractor.seed_units import seed_units_from_csv
+from backend.app.routes.sync import router as sync_router
 
 logger = logging.getLogger("backend.app")
 
@@ -20,6 +23,14 @@ logger = logging.getLogger("backend.app")
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifespan context manager for application startup and shutdown."""
     logger.info("Starting Building Analytics Backend service...")
+    
+    # Auto-seed units if empty
+    with next(get_db()) as db:
+        unit_count = db.scalar(select(func.count(UnitModel.unit_code)))
+        if unit_count == 0:
+            logger.info("Units table is empty. Auto-seeding from CSV...")
+            seed_units_from_csv(db=db)
+    
     yield
     logger.info("Shutting down Building Analytics Backend service.")
     engine.dispose()
@@ -33,6 +44,8 @@ def create_app() -> FastAPI:
         description="Persistent PostgreSQL storage and analytics API for Chilean condominium financial reports.",
         lifespan=lifespan,
     )
+
+    app.include_router(sync_router, prefix="/api/v1")
 
     @app.get(
         "/",

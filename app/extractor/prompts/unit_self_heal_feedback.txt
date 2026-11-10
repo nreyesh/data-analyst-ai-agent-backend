@@ -1,0 +1,9 @@
+The previous unit bill extraction attempt contained mathematical or structural validation discrepancies when cross-checked against the document's declared figures:
+
+{validation_errors}
+
+Please re-inspect the "Nota de Cobro" PDF document carefully and correct these discrepancies:
+1. Verify `issue_date` (`01/MM/YYYY`), `unit_code` (e.g., "B-504"), `unit_tower` (e.g., "B"), `unit_number` (e.g., 504), `alicuota_total` (float), `last_payment_date` (`DD/MM/YYYY`), and `last_payment_amount` (integer CLP).
+2. In `concepts` (Tabla Conceptos), ensure all rows above "Subtotal Departamento" are included and their `amount` values sum exactly to "Subtotal Departamento". Do NOT include "Subtotal Departamento" itself.
+3. In `consumptions` (Tabla Consumos Generales), verify `previous_reading`, `current_reading`, `consumption` (`current_reading - previous_reading`), `unit_rate`, and `total` (integer CLP). Do NOT include "Subtotal Consumo".
+4. In `unit_charges` (Tabla Gastos por Unidad), classify fines/surcharges above "Subtotal Recargos" as `"recargo"` and fixed items below "Subtotal Recargos" (such as "Fondo de Indemnizacion") as `"fixed_charge"`. Do NOT include "Subtotal Recargos" or "Total del mes".

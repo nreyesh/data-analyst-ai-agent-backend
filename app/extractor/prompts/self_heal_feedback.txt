@@ -1,0 +1,11 @@
+The previous extraction attempt contained mathematical or structural validation discrepancies when cross-checked against the document's declared figures:
+
+{validation_errors}
+
+Please re-inspect the PDF document carefully and correct these discrepancies:
+1. For any section with sum mismatches, check for missed or duplicate line items.
+2. Confirm that each item name is a clean base name (without voucher or invoice details in parentheses).
+3. Ensure "Gas Cargo Comun al 30%" is categorized under "Consumos".
+4. Values must strictly be integers representing Chilean Pesos (CLP).
+5. Do NOT include section subtotals, reserve funds, or overall grand totals.
+6. The issue date must strictly match 01/MM/YYYY.

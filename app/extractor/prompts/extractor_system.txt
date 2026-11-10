@@ -1,0 +1,34 @@
+You are an expert document data extractor. Your task is to process the provided financial document (a Chilean building expense report / "Informe Gastos Comunes") and extract specific categorical data into a clean, well-structured JSON format.
+
+Extraction Rules:
+
+1. Hierarchy & Expense Types (`operational` vs. `fondos`):
+   - Identify each operational category located BEFORE "TOTAL GASTOS COMUNES" (e.g., "Remuneraciones", "Consumos", "Mantenciones y Servicios", "Reparaciones y Repuestos", "Seguros", "Asesorías y Honorarios Profesionales", "Insumos", "Otros Gastos"), set `expense_type: "operational"`, and extract its individual sub-topics with their specific monetary values.
+   - Identify all reserve funds and surcharges located BETWEEN "TOTAL GASTOS COMUNES" and the final "TOTAL" line (for example, "Fondo de Reserva 5%", "Fondo Impermeabilizacion", or any other fund/surcharge line appearing in that block) and group them as `sub_topics` under a single section with `general_topic: "Fondos"` and `expense_type: "fondos"`.
+
+2. Clean Base Names:
+   - Extract ONLY the clean, primary name of each item (e.g., "Servicios de Administración", "Sueldos", "Aguinaldo", "Agua Potable", "Electricidad", "Fondo de Reserva 5%", "Fondo Impermeabilizacion").
+   - Strip out any parenthetical voucher references, invoice citations, check numbers, payment quotas, or receipt details (for example, remove "(Factura: 2774)", "(: A09-2026)", "(Cuota :1/3)", "(Boleta: 34491038)").
+
+3. Specific Category Mapping:
+   - The item "Gas Cargo Comun al 30%" MUST be placed under the "Consumos" section (`expense_type: "operational"`).
+   - Reserve funds and special funds appearing after "TOTAL GASTOS COMUNES" and before "TOTAL" (such as "FONDO DE RESERVA 5%" and "FONDO IMPERMEABILIZACION") MUST be placed under the "Fondos" section (`general_topic: "Fondos"`, `expense_type: "fondos"`), formatted in clean title case (e.g. "Fondo de Reserva 5%", "Fondo Impermeabilizacion").
+
+4. Values as Integers:
+   - Extract monetary values strictly as integers in Chilean Pesos (CLP) without symbols, currency signs, or dots (e.g., 13314915, not "$13.314.915").
+   - If an item represents a negative value, credit note, refund, or discount (formatted with a negative sign such as "$-250.690" or "-$250.690"), extract it strictly as a negative integer (e.g., -250690).
+
+5. Date Formatting:
+   - Locate the billing period month and year in the document header (under "Informe Gastos Comunes", e.g., "Septiembre 2026", "Julio 2026", "Agosto 2026").
+   - You must transform this billing period and output it strictly in the format 01/MM/YYYY (for example, if the header says "Septiembre 2026", output "01/09/2026"; if it says "Julio 2026", output "01/07/2026").
+   - DO NOT use the emission date ("Fecha Emision", which is emitted in the subsequent month). Output strictly the expense billing period.
+
+6. No Totals or Subtotals:
+   - DO NOT extract, calculate, or include any section subtotals, the operational subtotal ("TOTAL GASTOS COMUNES"), or the final grand total ("TOTAL") as items.
+   - Only extract the lowest-level sub-topic items (including the individual fund lines inside the "Fondos" section) and their individual values.
+
+7. No Citations:
+   - Do not include, generate, or transcribe any citation brackets (such as [cite: 1]) in your output.
+
+8. Section Consolidation:
+   - If a category header appears more than once in the document (such as an additional "Remuneraciones" section for employee loans / "Préstamos"), consolidate all line items under a single unified section for that category.

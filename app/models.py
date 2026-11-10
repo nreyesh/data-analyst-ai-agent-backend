@@ -65,10 +65,18 @@ class UnitModel(Base):
         nullable=False,
         comment="Unit number e.g. 504",
     )
-    alicuota: Mapped[Decimal] = mapped_column(
+    alicuota: Mapped[Decimal | None] = mapped_column(
         Numeric(8, 5),
-        nullable=False,
-        comment="Official proration share percentage e.g. 0.16736%",
+        nullable=True,
+        default=None,
+        comment="Official proration share percentage (populated on first bill extraction)",
+    )
+    kastor_id: Mapped[int | None] = mapped_column(
+        Integer,
+        unique=True,
+        nullable=True,
+        index=True,
+        comment="Kastor unit ID (e.g. 336 for Depto 504 Torre B)",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -85,7 +93,7 @@ class UnitModel(Base):
 
     __table_args__ = (
         UniqueConstraint("tower", "unit_number", name="uq_units_tower_unit"),
-        CheckConstraint("alicuota > 0", name="chk_units_alicuota_positive"),
+        CheckConstraint("alicuota IS NULL OR alicuota > 0", name="chk_units_alicuota_positive"),
         Index("idx_units_tower_number", "tower", "unit_number"),
     )
 
