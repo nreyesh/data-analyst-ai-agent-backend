@@ -179,9 +179,6 @@ To trigger the Cloud Run Job and view its logs from your terminal, your Google C
 Run these three commands in your terminal (replace `PROJECT_ID` and `DEVELOPER_EMAIL`):
 
 ```bash
-PROJECT_ID="building-analytics-dev-513719"
-DEVELOPER_EMAIL="nereyes@miuandes.cl"
-
 # 1. Grant Cloud Run execution permission:
 gcloud projects add-iam-policy-binding ${PROJECT_ID} \
   --member="user:${DEVELOPER_EMAIL}" \

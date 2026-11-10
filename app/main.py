@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import text, func
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from backend.app.config import CONFIG
@@ -23,17 +23,21 @@ logger = logging.getLogger("backend.app")
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifespan context manager for application startup and shutdown."""
     logger.info("Starting Building Analytics Backend service...")
-    
-    # Auto-seed units if empty
-    with next(get_db()) as db:
-        unit_count = db.scalar(select(func.count(UnitModel.unit_code)))
-        if unit_count == 0:
-            logger.info("Units table is empty. Auto-seeding from CSV...")
-            seed_units_from_csv(db=db)
-    
+
+    # Auto-seed units if empty (graceful non-blocking check on container boot)
+    try:
+        with next(get_db()) as db:
+            unit_count = db.scalar(select(func.count(UnitModel.unit_code)))
+            if unit_count == 0:
+                logger.info("Units table is empty. Auto-seeding from CSV...")
+                seed_units_from_csv(db=db)
+    except Exception as exc:
+        logger.warning("Could not auto-seed units table on startup: %s", exc)
+
     yield
     logger.info("Shutting down Building Analytics Backend service.")
     engine.dispose()
+
 
 
 def create_app() -> FastAPI:
