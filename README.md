@@ -159,6 +159,57 @@ Downloaded PDFs are automatically saved to GCS (or local `data/` folder in local
 
 ---
 
+## ☁️ Running the Extraction in Google Cloud
+
+Because Cloud SQL has **no public IP** and lives in a **Private VPC**, you do **not** need complex networking on your laptop to run extractions. Instead, you trigger the extraction container directly in the cloud as a **Cloud Run Job**.
+
+### Method 1: Trigger the Cloud Run Job via `gcloud` (Recommended)
+
+The Cloud Run Job already runs inside the VPC with direct access to Cloud SQL, GCS, and Secret Manager. You only need `gcloud` authenticated on your machine:
+
+```bash
+# 1. Trigger the standard monthly sync (Building + 420 units for latest closed month):
+gcloud run jobs execute building-analytics-sync-dev --region us-central1
+
+# 2. Trigger with custom arguments (e.g. extract single unit B-504 for Sept 2026):
+gcloud run jobs execute building-analytics-sync-dev --region us-central1 \
+  --args="--target","units","--unit","B-504","--month","2026-09"
+
+# 3. Backfill a historical date range:
+gcloud run jobs execute building-analytics-sync-dev --region us-central1 \
+  --args="--target","building","--from","2025-01","--to","2026-09"
+
+# 4. Stream real-time execution logs to your terminal:
+gcloud logging tail "resource.type=cloud_run_job AND resource.labels.job_name=building-analytics-sync-dev"
+```
+
+### Method 2: Automated Monthly Trigger (Cloud Scheduler)
+
+No manual action required. A Cloud Scheduler cron triggers the Cloud Run Job automatically on the 6th of every month (`0 2 6 * *`) once Kastor publishes the previous month's closed numbers.
+
+### Method 3: (Optional) Running the Python CLI from your Laptop against Cloud SQL
+
+If you want to run `python -m backend.app.extractor.cli` locally while writing directly to the Cloud SQL database, you must tunnel into the private VPC using the **Cloud SQL Auth Proxy**:
+
+```bash
+# 1. Start the proxy on your machine:
+cloud-sql-proxy building-analytics-dev-513719:us-central1:building-analytics-instance-dev-c2fe0a17 --port 5432
+
+# 2. In another terminal, export credentials pointing to the local tunnel:
+export DB_HOST="localhost"
+export DB_PORT="5432"
+export DB_USER="app_user"
+export DB_PASS="<password-from-secret-manager>"
+export GEMINI_API_KEY="<your-gemini-key>"
+
+# 3. Run the CLI:
+PYTHONPATH=. python -m backend.app.extractor.cli --target building --month 2026-09
+```
+*(Method 1 is recommended as it requires zero local proxying or credential copying).*
+
+
+---
+
 ## ⚙️ Environment Profiles
 
 Backend configuration is loaded dynamically via `backend/app/config.py`:
