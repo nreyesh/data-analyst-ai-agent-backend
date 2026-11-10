@@ -7,11 +7,19 @@ import os
 from pathlib import Path
 from typing import Any
 import urllib.parse
+from dotenv import load_dotenv
 import yaml
 
 logger = logging.getLogger("backend.config")
 
+# Automatically load environment variables from .env
+load_dotenv()
+_backend_env = Path(__file__).resolve().parent.parent / ".env"
+if _backend_env.is_file():
+    load_dotenv(_backend_env)
+
 _PROFILE_DIR = Path(__file__).resolve().parent.parent / "profile"
+
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

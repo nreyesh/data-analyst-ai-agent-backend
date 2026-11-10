@@ -103,3 +103,16 @@ jobs:
             --project="${PROJECT_ID}" \
             --service-account="${RUNNER_SA}" \
             --quiet
+
+      # 9. Update Extraction Pipeline Cloud Run Job with new image
+      - name: Update Extraction Sync Job
+        env:
+          ENV: ${{ steps.set_env.outputs.env }}
+          PROJECT_ID: ${{ steps.set_env.outputs.project_id }}
+        run: |
+          echo "Updating Cloud Run extraction sync job with new image..."
+          gcloud run jobs update "building-analytics-sync-${ENV}" \
+            --image="${IMAGE_URI}" \
+            --region="us-central1" \
+            --project="${PROJECT_ID}" \
+            --quiet
