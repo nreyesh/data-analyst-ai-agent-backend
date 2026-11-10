@@ -1,0 +1,15 @@
+# Web API Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pyyaml>=6.0.1
+
+# PostgreSQL & Relational Persistence
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+psycopg[binary]>=3.2.0
+uuid-utils>=0.17.0
+
+# Settings & Environment
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0

@@ -1,0 +1,16 @@
+# ==============================================================================
+# Production Environment Profile (PROD)
+# ==============================================================================
+environment: "prod"
+
+database:
+  name: "building_analytics_db_prod"
+  user: "app_user"
+  # In Cloud Run DB_HOST is injected by Terraform via VPC Private IP
+  host: "localhost"
+  port: 5432
+  pool_size: 20
+  max_overflow: 30
+
+storage:
+  bucket: "building-analytics-data-prod"

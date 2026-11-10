@@ -1,0 +1,18 @@
+# ==============================================================================
+# Development Environment Profile (DEV)
+# ==============================================================================
+environment: "dev"
+
+database:
+  name: "building_analytics_db_dev"
+  user: "app_user"
+  # In local dev fallback to localhost or cloud sql proxy; in Cloud Run DB_HOST is injected by Terraform
+  host: "localhost"
+  port: 5432
+  pool_size: 5
+  max_overflow: 10
+  # Cloud SQL Connection Name (used with Cloud SQL Auth Proxy):
+  instance_connection_name: "building-analytics-dev-513719:us-central1:building-analytics-instance-dev-c2fe0a17"
+
+storage:
+  bucket: "building-analytics-data-dev"

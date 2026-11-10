@@ -1,0 +1,105 @@
+name: "Deploy Backend & Run Migrations"
+
+on:
+  push:
+    branches: [ "dev", "main" ]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: "Build, Migrate & Deploy Backend"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. Determine environment context based on git branch
+      - name: Set Environment Context
+        id: set_env
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "env=prod" >> $GITHUB_OUTPUT
+            echo "project_id=building-analytics-prod" >> $GITHUB_OUTPUT
+            echo "wif_provider=projects/PROD_PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool-prod/providers/github-provider" >> $GITHUB_OUTPUT
+            echo "deployer_sa=terraform-prod-sa@building-analytics-prod.iam.gserviceaccount.com" >> $GITHUB_OUTPUT
+            echo "runner_sa=building-analytics-runner-prod@building-analytics-prod.iam.gserviceaccount.com" >> $GITHUB_OUTPUT
+          else
+            echo "env=dev" >> $GITHUB_OUTPUT
+            echo "project_id=building-analytics-dev-513719" >> $GITHUB_OUTPUT
+            echo "wif_provider=projects/880396886857/locations/global/workloadIdentityPools/github-pool-dev/providers/github-provider" >> $GITHUB_OUTPUT
+            echo "deployer_sa=terraform-dev-sa@building-analytics-dev-513719.iam.gserviceaccount.com" >> $GITHUB_OUTPUT
+            echo "runner_sa=building-analytics-runner-dev@building-analytics-dev-513719.iam.gserviceaccount.com" >> $GITHUB_OUTPUT
+          fi
+
+      # 2. Keyless Authentication to Google Cloud via Workload Identity Federation
+      - name: Google Cloud Auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ steps.set_env.outputs.wif_provider }}
+          service_account: ${{ steps.set_env.outputs.deployer_sa }}
+
+      # 3. Setup Google Cloud CLI
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 4. Configure Docker authentication for Artifact Registry
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      # 5. Build and Tag Docker Image
+      - name: Build & Tag Backend Container Image
+        env:
+          PROJECT_ID: ${{ steps.set_env.outputs.project_id }}
+          ENV: ${{ steps.set_env.outputs.env }}
+        run: |
+          IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/building-analytics-repo-${ENV}/building-analytics-backend:${{ github.sha }}"
+          IMAGE_LATEST="us-central1-docker.pkg.dev/${PROJECT_ID}/building-analytics-repo-${ENV}/building-analytics-backend:latest"
+
+          echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
+
+          docker build -t "${IMAGE_URI}" -t "${IMAGE_LATEST}" .
+
+      # 6. Push Container Image to Artifact Registry
+      - name: Push Container to Artifact Registry
+        run: |
+          docker push "${IMAGE_URI}"
+          docker push "us-central1-docker.pkg.dev/${{ steps.set_env.outputs.project_id }}/building-analytics-repo-${{ steps.set_env.outputs.env }}/building-analytics-backend:latest"
+
+      # 7. Execute Database Migration Job Synchronously inside VPC
+      - name: Run Database Migrations (Cloud Run Job)
+        env:
+          ENV: ${{ steps.set_env.outputs.env }}
+          PROJECT_ID: ${{ steps.set_env.outputs.project_id }}
+        run: |
+          echo "Updating Cloud Run migration job with new image..."
+          gcloud run jobs update "building-analytics-migrate-${ENV}" \
+            --image="${IMAGE_URI}" \
+            --region="us-central1" \
+            --project="${PROJECT_ID}" \
+            --quiet
+
+          echo "Executing migration job synchronously inside VPC..."
+          gcloud run jobs execute "building-analytics-migrate-${ENV}" \
+            --wait \
+            --region="us-central1" \
+            --project="${PROJECT_ID}"
+
+      # 8. Deploy updated Backend Service Revision to Cloud Run
+      # This step only executes if step 7 exits with code 0
+      - name: Deploy Backend Service to Cloud Run
+        env:
+          ENV: ${{ steps.set_env.outputs.env }}
+          PROJECT_ID: ${{ steps.set_env.outputs.project_id }}
+          RUNNER_SA: ${{ steps.set_env.outputs.runner_sa }}
+        run: |
+          gcloud run deploy "building-analytics-backend-${ENV}" \
+            --image="${IMAGE_URI}" \
+            --region="us-central1" \
+            --project="${PROJECT_ID}" \
+            --service-account="${RUNNER_SA}" \
+            --quiet
