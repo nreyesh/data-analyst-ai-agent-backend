@@ -91,8 +91,71 @@ Once pushed, the **GitHub Actions CI/CD pipeline** takes over:
 Run the schema integrity test suite (validates foreign key constraints, unique constraints, and cascade delete rules):
 
 ```bash
-PYTHONPATH=. pytest backend/tests/test_schema_integrity.py -v
+PYTHONPATH=. pytest backend/tests/ -v
 ```
+
+---
+
+## 📥 Running the PDF Extraction Process Manually
+
+The extractor downloads condominium financial PDFs from Kastor, parses them with Gemini Flash Lite, verifies the numbers against ground truth, and saves the data into PostgreSQL.
+
+### 1. Prerequisites
+Ensure you have set your Gemini API key:
+```bash
+export GEMINI_API_KEY="your-gemini-api-key"
+```
+
+### 2. Manual CLI Commands
+
+Run the CLI module with `PYTHONPATH=. python -m backend.app.extractor.cli`:
+
+#### Option A: Building Expenses Only
+```bash
+# Latest closed month (default: 1 month behind today):
+PYTHONPATH=. python -m backend.app.extractor.cli --target building --current-month
+
+# Specific month (e.g. September 2026):
+PYTHONPATH=. python -m backend.app.extractor.cli --target building --month 2026-09
+
+# Historical range:
+PYTHONPATH=. python -m backend.app.extractor.cli --target building --from 2025-01 --to 2026-09
+```
+
+#### Option B: Unit Expenses ("Notas de Cobro")
+```bash
+# Specific apartment for a specific month (e.g. Depto 504 Torre B):
+PYTHONPATH=. python -m backend.app.extractor.cli --target units --unit B-504 --month 2026-09
+
+# Specific apartment across a date range:
+PYTHONPATH=. python -m backend.app.extractor.cli --target units --unit B-504 --from 2025-01 --to 2026-09
+
+# ALL 420 apartments for the current month:
+PYTHONPATH=. python -m backend.app.extractor.cli --target units --unit all --current-month
+
+# ALL 420 apartments for a specific month:
+PYTHONPATH=. python -m backend.app.extractor.cli --target units --unit all --month 2026-09
+```
+
+#### Option C: Complete Monthly Sync (Building + All 420 Units)
+```bash
+# Run everything for the latest closed month:
+PYTHONPATH=. python -m backend.app.extractor.cli --target all --current-month
+
+# Run everything for a specific month:
+PYTHONPATH=. python -m backend.app.extractor.cli --target all --month 2026-09
+```
+
+### 3. Helpful Flags
+
+- `--force`: Re-extract and overwrite data already in the database (by default, already processed records are skipped).
+- `--dry-run`: Test download and AI extraction without writing to PostgreSQL.
+- `-v` or `--verbose`: Show detailed debug logs, timings, and token pacing.
+
+### 4. Storage Structure
+Downloaded PDFs are automatically saved to GCS (or local `data/` folder in local dev):
+- Building reports: `building/{year}-{month}.pdf`
+- Unit bills: `units/{unit_code}/{year}-{month}.pdf` (e.g. `units/B-504/2026-09.pdf`)
 
 ---
 
