@@ -2,7 +2,7 @@ import os
 import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 from alembic import context
 
 # Ensure workspace root or app directory is in sys.path
@@ -23,14 +23,12 @@ target_metadata = Base.metadata
 
 # Set database URL dynamically from profile / env vars
 database_url = get_database_url()
-config.set_main_option("sqlalchemy.url", database_url)
 
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -42,13 +40,13 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = os.getenv("DATABASE_URL", configuration.get("sqlalchemy.url", DEFAULT_DB_URL))
-
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
+    """Run migrations in 'online' mode.
+    
+    Directly creates engine from database_url to bypass configparser
+    percent-interpolation bugs when passwords contain special URL-encoded characters.
+    """
+    connectable = create_engine(
+        database_url,
         poolclass=pool.NullPool,
     )
 
