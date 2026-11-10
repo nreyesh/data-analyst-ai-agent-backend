@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from backend.app.database import SessionLocal
 from backend.app.extractor.downloader import Downloader
-from backend.app.extractor.extractor import CondominiumExtractor
+from backend.app.extractor.extractor import CondominiumExtractor, format_error_message
 from backend.app.extractor.seed_units import seed_units_from_csv
 from backend.app.models import ExpenseReportModel, UnitBillModel, UnitModel
 
@@ -28,6 +28,12 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Suppress verbose third-party HTTP and internal library logging
+    # to avoid publishing download URLs or noisy connection traces
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("google_genai").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 def parse_month_str(month_str: str) -> Tuple[int, int]:
@@ -141,10 +147,10 @@ async def process_pipeline(args: argparse.Namespace) -> int:
                         logger.info("✅ Building report for %s successfully synced.", period_iso)
                         stats["building_synced"] += 1
                     except FileNotFoundError:
-                        logger.warning("Building report PDF for %s not published on Kastor (404).", period_iso)
+                        logger.warning("Building report PDF for %s not published yet (404).", period_iso)
                         stats["building_failed"] += 1
                     except Exception as exc:
-                        logger.error("❌ Failed processing building report for %s: %s", period_iso, exc)
+                        logger.error("❌ Failed processing building report for %s: %s", period_iso, format_error_message(exc))
                         stats["building_failed"] += 1
 
             # -------------------------------------------------------------
@@ -204,15 +210,26 @@ async def process_pipeline(args: argparse.Namespace) -> int:
                         logger.debug("Unit %s bill for %s not published yet (404).", u_code, period_iso)
                         stats["units_not_published"] += 1
                     except Exception as exc:
-                        logger.error("❌ Failed processing unit %s for %s: %s", u_code, period_iso, exc)
+                        logger.error("❌ Failed processing unit %s for %s: %s", u_code, period_iso, format_error_message(exc))
                         stats["units_failed"] += 1
 
-        print("\n" + "=" * 50)
-        print("📊 EXTRACTION PIPELINE SUMMARY")
-        print("=" * 50)
-        print(f"Building Reports  : ✅ Synced: {stats['building_synced']} | ⏭️  Skipped: {stats['building_skipped']} | ❌ Failed: {stats['building_failed']}")
-        print(f"Unit Bills        : ✅ Synced: {stats['units_synced']} | ⏭️  Skipped: {stats['units_skipped']} | ⏳ Not Published: {stats['units_not_published']} | ❌ Failed: {stats['units_failed']}")
-        print("=" * 50 + "\n")
+        logger.info("==================================================")
+        logger.info("📊 EXTRACTION PIPELINE SUMMARY")
+        logger.info("==================================================")
+        logger.info(
+            "Building Reports  : ✅ Synced: %d | ⏭️  Skipped: %d | ❌ Failed: %d",
+            stats["building_synced"],
+            stats["building_skipped"],
+            stats["building_failed"],
+        )
+        logger.info(
+            "Unit Bills        : ✅ Synced: %d | ⏭️  Skipped: %d | ⏳ Not Published: %d | ❌ Failed: %d",
+            stats["units_synced"],
+            stats["units_skipped"],
+            stats["units_not_published"],
+            stats["units_failed"],
+        )
+        logger.info("==================================================")
 
         return 0 if (stats["building_failed"] == 0 and stats["units_failed"] == 0) else 1
 

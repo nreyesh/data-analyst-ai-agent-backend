@@ -60,7 +60,7 @@ def _load_prompt(filename: str) -> str:
 
 def get_gemini_client() -> genai.Client:
     """Create and return a configured Google GenAI client."""
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
     if not api_key:
         raise ValueError(
             "GEMINI_API_KEY is not set. Please set it in your environment or Secret Manager."
@@ -87,6 +87,31 @@ def _parse_dmy_date(dmy_str: str | None) -> date | None:
             return date(int(parts[0]), int(parts[1]), int(parts[2]))
         return date(int(parts[2]), int(parts[1]), int(parts[0]))
     return None
+
+
+def format_error_message(exc: Exception) -> str:
+    """Format exceptions into clean, human-readable messages without raw nested dict dumps."""
+    msg = str(exc)
+    if "503" in msg or "UNAVAILABLE" in msg:
+        return "Model temporarily experiencing high demand (503 Service Unavailable). Backing off before retry."
+    if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+        return "API rate limit reached (429 Quota Exceeded). Backing off."
+    if "API_KEY_INVALID" in msg:
+        return "Invalid Gemini API key provided. Please verify GEMINI_API_KEY in Secret Manager."
+    if "404" in msg or "NOT_FOUND" in msg:
+        return "Resource or model not found (404)."
+
+    import re
+    match = re.search(r"'message':\s*'([^']+)'", msg)
+    if match:
+        return match.group(1)
+    match_double = re.search(r'"message":\s*"([^"]+)"', msg)
+    if match_double:
+        return match_double.group(1)
+
+    if len(msg) > 150:
+        return msg[:147] + "..."
+    return msg
 
 
 class CondominiumExtractor:
@@ -199,16 +224,21 @@ class CondominiumExtractor:
                 )
 
             except Exception as exc:
+                clean_err = format_error_message(exc)
                 logger.warning(
                     "Building extraction attempt %d failed with model %s: %s",
                     attempt + 1,
                     chosen_model,
-                    exc,
+                    clean_err,
                 )
                 if "429" in str(exc) or "ResourceExhausted" in type(exc).__name__:
                     self.rate_limiter.report_rate_limit(chosen_model, backoff_seconds=30.0)
+                    await asyncio.sleep(2.0)
+                elif "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                    await asyncio.sleep(3.0 * (attempt + 1))
+
                 if attempt == self.max_retries and best_report is None:
-                    raise
+                    raise RuntimeError(clean_err) from exc
 
         return best_report, best_metadata, ground_truth, best_val  # type: ignore[return-value]
 
@@ -306,16 +336,21 @@ class CondominiumExtractor:
                 )
 
             except Exception as exc:
+                clean_err = format_error_message(exc)
                 logger.warning(
                     "Unit bill extraction attempt %d failed with model %s: %s",
                     attempt + 1,
                     chosen_model,
-                    exc,
+                    clean_err,
                 )
                 if "429" in str(exc) or "ResourceExhausted" in type(exc).__name__:
                     self.rate_limiter.report_rate_limit(chosen_model, backoff_seconds=30.0)
+                    await asyncio.sleep(2.0)
+                elif "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                    await asyncio.sleep(3.0 * (attempt + 1))
+
                 if attempt == self.max_retries and best_report is None:
-                    raise
+                    raise RuntimeError(clean_err) from exc
 
         return best_report, best_metadata, ground_truth, best_val  # type: ignore[return-value]
 

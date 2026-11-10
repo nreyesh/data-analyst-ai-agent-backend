@@ -110,13 +110,13 @@ class Downloader:
         async with httpx.AsyncClient(transport=transport, follow_redirects=True, timeout=30.0) as client:
             resp = await client.get(url)
             if resp.status_code == 404:
-                raise FileNotFoundError(f"Document not found on Kastor (404) at {url}")
+                raise FileNotFoundError(f"Document not found (404) for {destination_path}")
             resp.raise_for_status()
 
             content = resp.content
             if not content.startswith(b"%PDF"):
                 raise ValueError(
-                    f"URL returned non-PDF response content-type={resp.headers.get('content-type')} at {url}"
+                    f"Remote source returned non-PDF response (content-type={resp.headers.get('content-type')}) for {destination_path}"
                 )
 
             saved_uri = self.save_pdf(content, destination_path)
