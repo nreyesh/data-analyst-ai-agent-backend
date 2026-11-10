@@ -159,53 +159,121 @@ Downloaded PDFs are automatically saved to GCS (or local `data/` folder in local
 
 ---
 
-## ☁️ Running the Extraction in Google Cloud
+## ☁️ Running the Extraction in Google Cloud (Cloud Run Jobs)
 
-Because Cloud SQL has **no public IP** and lives in a **Private VPC**, you do **not** need complex networking on your laptop to run extractions. Instead, you trigger the extraction container directly in the cloud as a **Cloud Run Job**.
+Because Cloud SQL has **no public IP** and lives inside a **Private VPC**, you do **not** need to configure VPNs, local database drivers, or connection proxies on your laptop to run extractions.
 
-### Method 1: Trigger the Cloud Run Job via `gcloud` (Recommended)
+Instead, you trigger the extraction container to run directly in Google Cloud as a serverless **Cloud Run Job** (`building-analytics-sync-dev`).
 
-The Cloud Run Job already runs inside the VPC with direct access to Cloud SQL, GCS, and Secret Manager. You only need `gcloud` authenticated on your machine:
+### 1. Developer IAM Permissions Required
+
+To trigger the Cloud Run Job and view its logs from your terminal, your Google Cloud user account (e.g. `user:developer@example.com`) must have the following roles:
+
+| Role | Name | Purpose |
+| :--- | :--- | :--- |
+| `roles/run.developer` | Cloud Run Developer | Allows executing, describing, and canceling Cloud Run Jobs. |
+| `roles/iam.serviceAccountUser` | Service Account User | Allows running jobs that execute under the `building-analytics-runner-dev` service account. |
+| `roles/logging.viewer` | Logs Viewer | Allows reading real-time execution logs via `gcloud logging tail`. |
+
+#### How to Grant These Roles (One-Time Setup by GCP Admin)
+Run these three commands in your terminal (replace `PROJECT_ID` and `DEVELOPER_EMAIL`):
 
 ```bash
-# 1. Trigger the standard monthly sync (Building + 420 units for latest closed month):
-gcloud run jobs execute building-analytics-sync-dev --region us-central1
+PROJECT_ID="building-analytics-dev-513719"
+DEVELOPER_EMAIL="nereyes@miuandes.cl"
 
-# 2. Trigger with custom arguments (e.g. extract single unit B-504 for Sept 2026):
+# 1. Grant Cloud Run execution permission:
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+  --member="user:${DEVELOPER_EMAIL}" \
+  --role="roles/run.developer"
+
+# 2. Grant permission to act as the Cloud Run runtime service account:
+gcloud iam service-accounts add-iam-policy-binding \
+  building-analytics-runner-dev@${PROJECT_ID}.iam.gserviceaccount.com \
+  --member="user:${DEVELOPER_EMAIL}" \
+  --role="roles/iam.serviceAccountUser"
+
+# 3. Grant permission to read execution logs:
+gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+  --member="user:${DEVELOPER_EMAIL}" \
+  --role="roles/logging.viewer"
+```
+
+---
+
+### 2. Step-by-Step: How to Execute from Your Machine
+
+Once the permissions are granted, running extractions requires only `gcloud`:
+
+#### Step A: Authenticate & Set Active Project
+```bash
+gcloud auth login
+gcloud config set project building-analytics-dev-513719
+```
+
+#### Step B: Trigger the Job
+
+##### 1. Default Monthly Sync (Building + All 420 Units for Latest Closed Month)
+```bash
+gcloud run jobs execute building-analytics-sync-dev --region us-central1
+```
+
+##### 2. Extract a Specific Unit and Month (e.g. Depto 504 Torre B for Sept 2026)
+```bash
 gcloud run jobs execute building-analytics-sync-dev --region us-central1 \
   --args="--target","units","--unit","B-504","--month","2026-09"
+```
 
-# 3. Backfill a historical date range:
+##### 3. Extract Building Expenses Only (Specific Month)
+```bash
 gcloud run jobs execute building-analytics-sync-dev --region us-central1 \
-  --args="--target","building","--from","2025-01","--to","2026-09"
+  --args="--target","building","--month","2026-09"
+```
 
-# 4. Stream real-time execution logs to your terminal:
+##### 4. Historical Backfill Across a Date Range
+```bash
+gcloud run jobs execute building-analytics-sync-dev --region us-central1 \
+  --args="--target","all","--from","2025-01","--to","2026-09"
+```
+
+##### 5. Force Re-Extraction (Overwrites existing data)
+```bash
+gcloud run jobs execute building-analytics-sync-dev --region us-central1 \
+  --args="--target","building","--month","2026-09","--force"
+```
+
+#### Step C: Watch Real-Time Execution Logs
+Stream the live log output directly in your console:
+```bash
 gcloud logging tail "resource.type=cloud_run_job AND resource.labels.job_name=building-analytics-sync-dev"
 ```
 
-### Method 2: Automated Monthly Trigger (Cloud Scheduler)
+---
 
-No manual action required. A Cloud Scheduler cron triggers the Cloud Run Job automatically on the 6th of every month (`0 2 6 * *`) once Kastor publishes the previous month's closed numbers.
+### 3. Automated Monthly Run (Cloud Scheduler)
 
-### Method 3: (Optional) Running the Python CLI from your Laptop against Cloud SQL
+No manual action is needed for the regular monthly billing cycle. A Cloud Scheduler cron (`0 2 6 * *`) triggers this Cloud Run Job automatically on the 6th day of every month at 02:00 AM UTC, as soon as Kastor publishes the previous month's closed numbers.
 
-If you want to run `python -m backend.app.extractor.cli` locally while writing directly to the Cloud SQL database, you must tunnel into the private VPC using the **Cloud SQL Auth Proxy**:
+---
+
+### 4. (Optional) Running Locally via Cloud SQL Auth Proxy
+
+If you specifically want to run `python -m backend.app.extractor.cli` locally on your laptop while writing directly to the Cloud SQL database, you can open an encrypted tunnel into the private VPC using the Cloud SQL Auth Proxy:
 
 ```bash
-# 1. Start the proxy on your machine:
+# Terminal 1: Open proxy tunnel
 cloud-sql-proxy building-analytics-dev-513719:us-central1:building-analytics-instance-dev-c2fe0a17 --port 5432
 
-# 2. In another terminal, export credentials pointing to the local tunnel:
+# Terminal 2: Run local CLI pointed to localhost:5432
 export DB_HOST="localhost"
 export DB_PORT="5432"
 export DB_USER="app_user"
 export DB_PASS="<password-from-secret-manager>"
 export GEMINI_API_KEY="<your-gemini-key>"
 
-# 3. Run the CLI:
 PYTHONPATH=. python -m backend.app.extractor.cli --target building --month 2026-09
 ```
-*(Method 1 is recommended as it requires zero local proxying or credential copying).*
+*(Triggering the Cloud Run Job via `gcloud` in Section 2 is strongly recommended because it requires zero local proxying or manual secret handling).*
 
 
 ---
