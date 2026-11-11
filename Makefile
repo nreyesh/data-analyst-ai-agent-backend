@@ -14,13 +14,13 @@ install: ## Install runtime and development dependencies
 	$(PIP) install -r requirements.txt -r requirements-dev.txt
 
 test: ## Run unit and integration tests
-	PYTHONPATH=.. $(PYTEST) tests -v
+	PYTHONPATH=. $(PYTEST) tests -v
 
 coverage: ## Run test suite and enforce 65% coverage quality gate
-	PYTHONPATH=.. $(PYTEST) tests --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=65
+	PYTHONPATH=. $(PYTEST) tests --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=65
 
 coverage-html: ## Generate interactive browser coverage report in htmlcov/
-	PYTHONPATH=.. $(PYTEST) tests --cov=app --cov-report=html
+	PYTHONPATH=. $(PYTEST) tests --cov=app --cov-report=html
 	@echo "Coverage HTML report generated at htmlcov/index.html"
 
 run: ## Run local FastAPI development server

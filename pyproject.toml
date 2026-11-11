@@ -1,7 +1,7 @@
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
-pythonpath = [".."]
+pythonpath = ["."]
 addopts = "-v --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=65"
 
 [tool.coverage.run]
