@@ -122,6 +122,11 @@ def validate_expense_report(report: ExpenseReport, ground_truth: GroundTruthData
         else:
             _check_diff(extracted_map[topic], expected, f"Section '{topic}' sum", errors)
 
+    if ground_truth.section_totals:
+        for topic in extracted_map:
+            if topic not in ground_truth.section_totals and topic.lower() != "fondos":
+                errors.append(f"Unexpected section '{topic}': not declared in ground truth report.")
+
     calc_op = sum(sum(item.value for item in s.sub_topics) for s in report.sections if s.expense_type == "operational")
     calc_fondos = sum(sum(item.value for item in s.sub_topics) for s in report.sections if s.expense_type == "fondos")
 

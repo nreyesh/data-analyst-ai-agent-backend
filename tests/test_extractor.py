@@ -2,6 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 import pymupdf as fitz
 import pytest
 from sqlalchemy import create_engine, select
@@ -35,6 +36,8 @@ from backend.app.models import (
     UnitBillConsumptionModel,
     UnitModel,
 )
+
+SAMPLE_BUILDING_PDF = Path("/home/nereyes/agentes/data-analyst/examples/2026-9.pdf")
 
 
 def make_synthetic_building_pdf() -> bytes:
@@ -116,6 +119,26 @@ def test_ground_truth_extraction_building_pdf():
     assert "Remuneraciones" in gt.section_totals
     assert "Consumos" in gt.section_totals
     assert "Fondos" in gt.section_totals
+
+
+def test_ground_truth_extraction_real_building_pdf():
+    """Verify deterministic extraction from real building expense PDF file."""
+    if not SAMPLE_BUILDING_PDF.is_file():
+        pytest.skip(f"Sample PDF not found at {SAMPLE_BUILDING_PDF}")
+    gt = extract_ground_truth(SAMPLE_BUILDING_PDF)
+    assert gt.period_date == "01/09/2026"
+    assert gt.operational_total == 56454297
+    assert gt.fondos_total == 9322715
+    assert gt.grand_total == 65777012
+    assert gt.section_totals["Remuneraciones"] == 19632258
+    assert gt.section_totals["Consumos"] == 13669643  # 8442107 + 5227536 (Gas Cargo)
+    assert gt.section_totals["Mantenciones y Servicios"] == 17071495
+    assert gt.section_totals["Reparaciones y Repuestos"] == 1965195
+    assert gt.section_totals["Seguros"] == 2243977
+    assert gt.section_totals["Asesorías y Honorarios Profesionales"] == 24324
+    assert gt.section_totals["Insumos"] == 1713550
+    assert gt.section_totals["Otros Gastos"] == 133855
+    assert gt.section_totals["Fondos"] == 9322715
 
 
 def test_ground_truth_extraction_unit_pdf():
@@ -398,3 +421,91 @@ def test_validate_unit_bill_report():
     val = validate_unit_bill_report(report, gt)
     assert val.is_valid
     assert len(val.errors) == 0
+
+
+def test_ground_truth_dynamic_discovery_new_category():
+    """Verify dynamic discovery of unseen category without hardcoding."""
+    mock_pdf_text = (
+        "Informe Gastos Comunes\n"
+        "Octubre 2026\n\n"
+        "Remuneraciones\n"
+        "Sueldos (Factura: 01)\n"
+        "$10.000.000\n"
+        "$10.000.000\n"
+        "Seguridad y Vigilancia\n"
+        "Guardias de Seguridad (Factura: 101)\n"
+        "$2.500.000\n"
+        "Camaras CCTV (Factura: 102)\n"
+        "$500.000\n"
+        "$3.000.000\n"
+        "Consumos\n"
+        "Agua Potable (Boleta: 999)\n"
+        "$1.000.000\n"
+        "$1.000.000\n"
+        "TOTAL GASTOS COMUNES\n"
+        "$14.000.000\n"
+        "FONDO DE RESERVA 5%\n"
+        "$700.000\n"
+        "TOTAL\n"
+        "$14.700.000\n"
+    )
+    gt = extract_ground_truth(mock_pdf_text)
+    assert gt.period_date == "01/10/2026"
+    assert gt.operational_total == 14000000
+    assert gt.fondos_total == 700000
+    assert gt.grand_total == 14700000
+
+    # Verify dynamically discovered new category
+    assert "Seguridad y Vigilancia" in gt.section_totals
+    assert gt.section_totals["Seguridad y Vigilancia"] == 3000000
+    assert gt.section_totals["Remuneraciones"] == 10000000
+    assert gt.section_totals["Consumos"] == 1000000
+    assert gt.section_totals["Fondos"] == 700000
+
+    # Verify validation succeeds with the new category
+    report = ExpenseReport(
+        issue_date="01/10/2026",
+        sections=[
+            Section(
+                general_topic="Remuneraciones",
+                expense_type="operational",
+                sub_topics=[SubTopic(name="Sueldos", value=10000000)],
+            ),
+            Section(
+                general_topic="Seguridad y Vigilancia",
+                expense_type="operational",
+                sub_topics=[
+                    SubTopic(name="Guardias de Seguridad", value=2500000),
+                    SubTopic(name="Camaras CCTV", value=500000),
+                ],
+            ),
+            Section(
+                general_topic="Consumos",
+                expense_type="operational",
+                sub_topics=[SubTopic(name="Agua Potable", value=1000000)],
+            ),
+            Section(
+                general_topic="Fondos",
+                expense_type="fondos",
+                sub_topics=[SubTopic(name="Fondo de Reserva 5%", value=700000)],
+            ),
+        ],
+    )
+    val = validate_expense_report(report, gt)
+    assert val.is_valid
+    assert len(val.errors) == 0
+
+    # Verify unexpected section detection
+    report_extra = ExpenseReport(
+        issue_date="01/10/2026",
+        sections=report.sections + [
+            Section(
+                general_topic="Caja Chica Fantasma",
+                expense_type="operational",
+                sub_topics=[SubTopic(name="Extra", value=50000)],
+            )
+        ],
+    )
+    val_extra = validate_expense_report(report_extra, gt)
+    assert not val_extra.is_valid
+    assert any("Unexpected section 'Caja Chica Fantasma'" in err for err in val_extra.errors)
