@@ -29,6 +29,7 @@ cloud_sql_proxy
 # Testing & coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # Logs

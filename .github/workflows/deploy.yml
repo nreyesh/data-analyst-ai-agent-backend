@@ -17,6 +17,21 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 0. Run Quality Gate Tests & Coverage before any build or deployment
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run Tests & Coverage Quality Gate (65% Threshold)
+        run: make coverage
+
       # 1. Determine environment context based on git branch
       - name: Set Environment Context
         id: set_env
