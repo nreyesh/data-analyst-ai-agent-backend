@@ -2,13 +2,18 @@
 
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
+import pymupdf as fitz
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from backend.app.extractor.extractor import CondominiumExtractor
-from backend.app.extractor.ground_truth import extract_ground_truth, extract_unit_ground_truth
+from backend.app.extractor.ground_truth import (
+    GroundTruthData,
+    UnitGroundTruthData,
+    extract_ground_truth,
+    extract_unit_ground_truth,
+)
 from backend.app.extractor.schemas import (
     ConceptItem,
     ConsumptionItem,
@@ -24,18 +29,63 @@ from backend.app.extractor.schemas import (
 from backend.app.models import (
     Base,
     BillingPeriodModel,
-    ExpenseItemModel,
-    ExpenseReportModel,
     ExpenseSectionModel,
     UnitBillChargeModel,
     UnitBillConceptModel,
     UnitBillConsumptionModel,
-    UnitBillModel,
     UnitModel,
 )
 
-SAMPLE_BUILDING_PDF = Path("/home/nereyes/agentes/data-analyst/examples/2026-9.pdf")
-SAMPLE_UNIT_PDF = Path("/home/nereyes/agentes/data-analyst/examples/504b-2026-08.pdf")
+
+def make_synthetic_building_pdf() -> bytes:
+    """Generate in-memory synthetic 1-page building expense PDF for parser testing."""
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text(
+        (50, 50),
+        "Informe Gastos Comunes\n"
+        "Septiembre 2026\n\n"
+        "Remuneraciones\n"
+        "$20.000.000\n"
+        "Consumos\n"
+        "$10.000.000\n"
+        "TOTAL GASTOS COMUNES\n"
+        "$30.000.000\n"
+        "Fondo de Reserva 5%\n"
+        "$1.500.000\n"
+        "TOTAL\n"
+        "$31.500.000\n",
+    )
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    return pdf_bytes
+
+
+def make_synthetic_unit_pdf() -> bytes:
+    """Generate in-memory synthetic 1-page individual unit bill PDF for parser testing."""
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text(
+        (50, 50),
+        "Nota de Cobro Agosto 2026 B-504\n\n"
+        "Alicuota Total\n"
+        "0,16736 %\n\n"
+        "Fecha ultimo Pago\n"
+        "31-08-2026\n\n"
+        "Monto ultimo Pago\n"
+        "$ 125.204\n\n"
+        "Subtotal Departamento\n"
+        "$ 108.776\n\n"
+        "Subtotal Consumo\n"
+        "$ 14.189\n\n"
+        "Subtotal Recargos\n"
+        "$ 2.500\n\n"
+        "Total del mes\n"
+        "$ 125.465\n",
+    )
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    return pdf_bytes
 
 
 @pytest.fixture
@@ -56,22 +106,22 @@ def db_session() -> Session:
 
 
 def test_ground_truth_extraction_building_pdf():
-    """Verify deterministic extraction from building expense PDF."""
-    assert SAMPLE_BUILDING_PDF.is_file()
-    gt = extract_ground_truth(SAMPLE_BUILDING_PDF)
+    """Verify deterministic extraction from in-memory building expense PDF."""
+    pdf_bytes = make_synthetic_building_pdf()
+    gt = extract_ground_truth(pdf_bytes)
     assert gt.period_date == "01/09/2026"
-    assert gt.operational_total == 56454297
-    assert gt.fondos_total == 9322715
-    assert gt.grand_total == 65777012
+    assert gt.operational_total == 30000000
+    assert gt.fondos_total == 1500000
+    assert gt.grand_total == 31500000
     assert "Remuneraciones" in gt.section_totals
     assert "Consumos" in gt.section_totals
     assert "Fondos" in gt.section_totals
 
 
 def test_ground_truth_extraction_unit_pdf():
-    """Verify deterministic extraction from individual unit bill PDF."""
-    assert SAMPLE_UNIT_PDF.is_file()
-    gt = extract_unit_ground_truth(SAMPLE_UNIT_PDF)
+    """Verify deterministic extraction from in-memory individual unit bill PDF."""
+    pdf_bytes = make_synthetic_unit_pdf()
+    gt = extract_unit_ground_truth(pdf_bytes)
     assert gt.period_date == "01/08/2026"
     assert gt.unit_code == "B-504"
     assert gt.unit_tower == "B"
@@ -81,6 +131,7 @@ def test_ground_truth_extraction_unit_pdf():
     assert gt.last_payment_amount == 125204
     assert gt.declared_dept_subtotal == 108776
     assert gt.declared_consumo_subtotal == 14189
+    assert gt.declared_recargos_subtotal == 2500
     assert gt.declared_total_month == 125465
 
 
@@ -113,7 +164,13 @@ def test_save_building_report_to_db(db_session: Session):
         latency_seconds=1.2,
         timestamp="2026-11-10T12:00:00Z",
     )
-    gt = extract_ground_truth(SAMPLE_BUILDING_PDF)
+    gt = GroundTruthData(
+        period_date="01/09/2026",
+        operational_total=25000000,
+        fondos_total=1250000,
+        grand_total=26250000,
+        section_totals={"Remuneraciones": 25000000, "Fondos": 1250000},
+    )
 
     saved_model = extractor.save_building_report_to_db(
         db=db_session,
@@ -203,7 +260,19 @@ def test_save_unit_bill_to_db_and_auto_populate_alicuota(db_session: Session):
         latency_seconds=0.9,
         timestamp="2026-11-10T12:05:00Z",
     )
-    gt = extract_unit_ground_truth(SAMPLE_UNIT_PDF)
+    gt = UnitGroundTruthData(
+        period_date="01/08/2026",
+        unit_code="B-504",
+        unit_tower="B",
+        unit_number=504,
+        alicuota_total=0.16736,
+        last_payment_date="31/08/2026",
+        last_payment_amount=125204,
+        declared_dept_subtotal=108776,
+        declared_consumo_subtotal=14189,
+        declared_recargos_subtotal=2500,
+        declared_total_month=125465,
+    )
 
     saved_bill = extractor.save_unit_bill_to_db(
         db=db_session,
@@ -252,7 +321,18 @@ def test_save_unit_bill_to_db_and_auto_populate_alicuota(db_session: Session):
 
 
 def test_validate_expense_report():
-    gt = extract_ground_truth(SAMPLE_BUILDING_PDF)
+    """Test validation logic for building expense report against ground truth."""
+    gt = GroundTruthData(
+        period_date="01/09/2026",
+        operational_total=30000000,
+        fondos_total=1500000,
+        grand_total=31500000,
+        section_totals={
+            "Consumos": 10000000,
+            "Remuneraciones": 20000000,
+            "Mantenciones y Servicios": 5000000,
+        },
+    )
     # Valid report matching GT period and section totals
     report = ExpenseReport(
         issue_date="01/09/2026",
@@ -282,14 +362,38 @@ def test_validate_expense_report():
 
 
 def test_validate_unit_bill_report():
-    gt = extract_unit_ground_truth(SAMPLE_UNIT_PDF)
+    """Test validation logic for individual unit bill against ground truth."""
+    gt = UnitGroundTruthData(
+        period_date="01/08/2026",
+        unit_code="B-504",
+        alicuota_total=0.16736,
+        declared_dept_subtotal=108776,
+        declared_consumo_subtotal=14189,
+        declared_recargos_subtotal=2500,
+        declared_total_month=125465,
+    )
     report = UnitBillReport(
         issue_date="01/08/2026",
         unit_code="B-504",
         alicuota_total=0.16736,
         concepts=[ConceptItem(concept="Gasto", amount=gt.declared_dept_subtotal or 0)],
-        consumptions=[ConsumptionItem(item_name="Torre B", previous_reading=0, current_reading=1, consumption=1, unit_rate=1, total=gt.declared_consumo_subtotal or 0)],
-        unit_charges=[UnitChargeItem(charge_name="Fondo de Indemnizacion", charge_type="fixed_charge", amount=2500)],
+        consumptions=[
+            ConsumptionItem(
+                item_name="Torre B",
+                previous_reading=0,
+                current_reading=1,
+                consumption=1,
+                unit_rate=1,
+                total=gt.declared_consumo_subtotal or 0,
+            )
+        ],
+        unit_charges=[
+            UnitChargeItem(
+                charge_name="Fondo de Indemnizacion",
+                charge_type="recargo",
+                amount=2500,
+            )
+        ],
     )
     val = validate_unit_bill_report(report, gt)
     assert val.is_valid
