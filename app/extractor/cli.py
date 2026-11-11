@@ -9,13 +9,14 @@ import logging
 import sys
 from typing import List, Tuple
 
+import httpx
 from sqlalchemy import select
 
-from backend.app.database import SessionLocal
+from backend.app.database import SessionLocal, engine
 from backend.app.extractor.downloader import Downloader
 from backend.app.extractor.extractor import CondominiumExtractor, format_error_message
 from backend.app.extractor.seed_units import seed_units_from_csv
-from backend.app.models import ExpenseReportModel, UnitBillModel, UnitModel
+from backend.app.models import Base, ExpenseReportModel, UnitBillModel, UnitModel
 
 logger = logging.getLogger("backend.extractor.cli")
 
@@ -73,6 +74,7 @@ def generate_month_range(from_str: str, to_str: str) -> List[Tuple[int, int]]:
 async def process_pipeline(args: argparse.Namespace) -> int:
     """Execute the extraction pipeline based on parsed CLI arguments."""
     setup_logging(args.verbose)
+    Base.metadata.create_all(engine)
     db = SessionLocal()
 
     # 1. Resolve target months
@@ -113,105 +115,108 @@ async def process_pipeline(args: argparse.Namespace) -> int:
     }
 
     try:
-        for year, month in target_months:
-            period_iso = f"{year}-{month:02d}-01"
-            logger.info("=== Processing Period %s ===", period_iso)
+        transport = httpx.AsyncHTTPTransport(retries=3)
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True, timeout=30.0) as http_client:
+            for year, month in target_months:
+                period_iso = f"{year}-{month:02d}-01"
+                logger.info("=== Processing Period %s ===", period_iso)
 
-            # -------------------------------------------------------------
-            # Target: Building Expenses
-            # -------------------------------------------------------------
-            if args.target in ("building", "all"):
-                # Check DB checkpoint
-                existing_report = db.scalar(
-                    select(ExpenseReportModel.id).where(
-                        ExpenseReportModel.period_date == period_iso
-                    )
-                )
-                if existing_report and not args.force:
-                    logger.info("Building report for %s already exists in DB. Skipping.", period_iso)
-                    stats["building_skipped"] += 1
-                else:
-                    logger.info("Fetching building PDF for %s...", period_iso)
-                    try:
-                        pdf_bytes, file_uri = await downloader.download_building_pdf(year, month)
-                        report, metadata, gt, val = await extractor.extract_building_report(pdf_bytes)
-
-                        if not args.dry_run:
-                            extractor.save_building_report_to_db(
-                                db=db,
-                                report=report,
-                                file_uri=file_uri,
-                                metadata=metadata,
-                                ground_truth=gt,
-                            )
-                        logger.info("✅ Building report for %s successfully synced.", period_iso)
-                        stats["building_synced"] += 1
-                    except FileNotFoundError:
-                        logger.warning("Building report PDF for %s not published yet (404).", period_iso)
-                        stats["building_failed"] += 1
-                    except Exception as exc:
-                        logger.error("❌ Failed processing building report for %s: %s", period_iso, format_error_message(exc))
-                        stats["building_failed"] += 1
-
-            # -------------------------------------------------------------
-            # Target: Unit Bills
-            # -------------------------------------------------------------
-            if args.target in ("units", "all"):
-                # Resolve units to process
-                if args.unit.lower() == "all":
-                    stmt = (
-                        select(UnitModel.unit_code, UnitModel.kastor_id)
-                        .where(UnitModel.kastor_id.is_not(None))
-                        .order_by(UnitModel.unit_code)
-                    )
-                else:
-                    stmt = (
-                        select(UnitModel.unit_code, UnitModel.kastor_id)
-                        .where(UnitModel.unit_code == args.unit.strip().upper())
-                    )
-
-                unit_records = db.execute(stmt).all()
-                if not unit_records:
-                    logger.warning("No matching units with valid kastor_id found for unit='%s'.", args.unit)
-
-                for u_code, k_id in unit_records:
+                # -------------------------------------------------------------
+                # Target: Building Expenses
+                # -------------------------------------------------------------
+                if args.target in ("building", "all"):
                     # Check DB checkpoint
-                    existing_bill = db.scalar(
-                        select(UnitBillModel.id).where(
-                            UnitBillModel.unit_code == u_code,
-                            UnitBillModel.period_date == period_iso,
+                    existing_report = db.scalar(
+                        select(ExpenseReportModel.id).where(
+                            ExpenseReportModel.period_date == period_iso
                         )
                     )
-                    if existing_bill and not args.force:
-                        logger.debug("Unit %s period %s already exists in DB. Skipping.", u_code, period_iso)
-                        stats["units_skipped"] += 1
-                        continue
+                    if existing_report and not args.force:
+                        logger.info("Building report for %s already exists in DB. Skipping.", period_iso)
+                        stats["building_skipped"] += 1
+                    else:
+                        logger.info("Fetching building PDF for %s...", period_iso)
+                        try:
+                            pdf_bytes, file_uri = await downloader.download_building_pdf(year, month, client=http_client)
+                            report, metadata, gt, val = await extractor.extract_building_report(pdf_bytes)
 
-                    try:
-                        pdf_bytes, file_uri = await downloader.download_unit_pdf(
-                            kastor_id=k_id,
-                            unit_code=u_code,
-                            year=year,
-                            month=month,
+                            if not args.dry_run:
+                                extractor.save_building_report_to_db(
+                                    db=db,
+                                    report=report,
+                                    file_uri=file_uri,
+                                    metadata=metadata,
+                                    ground_truth=gt,
+                                )
+                            logger.info("✅ Building report for %s successfully synced.", period_iso)
+                            stats["building_synced"] += 1
+                        except FileNotFoundError:
+                            logger.warning("Building report PDF for %s not published yet (404).", period_iso)
+                            stats["building_failed"] += 1
+                        except Exception as exc:
+                            logger.error("❌ Failed processing building report for %s: %s", period_iso, format_error_message(exc))
+                            stats["building_failed"] += 1
+
+                # -------------------------------------------------------------
+                # Target: Unit Bills
+                # -------------------------------------------------------------
+                if args.target in ("units", "all"):
+                    # Resolve units to process
+                    if args.unit.lower() == "all":
+                        stmt = (
+                            select(UnitModel.unit_code, UnitModel.kastor_id)
+                            .where(UnitModel.kastor_id.is_not(None))
+                            .order_by(UnitModel.unit_code)
                         )
-                        report, metadata, gt, val = await extractor.extract_unit_bill(pdf_bytes)
+                    else:
+                        stmt = (
+                            select(UnitModel.unit_code, UnitModel.kastor_id)
+                            .where(UnitModel.unit_code == args.unit.strip().upper())
+                        )
 
-                        if not args.dry_run:
-                            extractor.save_unit_bill_to_db(
-                                db=db,
-                                report=report,
-                                file_uri=file_uri,
-                                metadata=metadata,
-                                ground_truth=gt,
+                    unit_records = db.execute(stmt).all()
+                    if not unit_records:
+                        logger.warning("No matching units with valid kastor_id found for unit='%s'.", args.unit)
+
+                    for u_code, k_id in unit_records:
+                        # Check DB checkpoint
+                        existing_bill = db.scalar(
+                            select(UnitBillModel.id).where(
+                                UnitBillModel.unit_code == u_code,
+                                UnitBillModel.period_date == period_iso,
                             )
-                        logger.info("✅ Unit %s period %s successfully synced.", u_code, period_iso)
-                        stats["units_synced"] += 1
-                    except FileNotFoundError:
-                        logger.debug("Unit %s bill for %s not published yet (404).", u_code, period_iso)
-                        stats["units_not_published"] += 1
-                    except Exception as exc:
-                        logger.error("❌ Failed processing unit %s for %s: %s", u_code, period_iso, format_error_message(exc))
-                        stats["units_failed"] += 1
+                        )
+                        if existing_bill and not args.force:
+                            logger.debug("Unit %s period %s already exists in DB. Skipping.", u_code, period_iso)
+                            stats["units_skipped"] += 1
+                            continue
+
+                        try:
+                            pdf_bytes, file_uri = await downloader.download_unit_pdf(
+                                kastor_id=k_id,
+                                unit_code=u_code,
+                                year=year,
+                                month=month,
+                                client=http_client,
+                            )
+                            report, metadata, gt, val = await extractor.extract_unit_bill(pdf_bytes)
+
+                            if not args.dry_run:
+                                extractor.save_unit_bill_to_db(
+                                    db=db,
+                                    report=report,
+                                    file_uri=file_uri,
+                                    metadata=metadata,
+                                    ground_truth=gt,
+                                )
+                            logger.info("✅ Unit %s period %s successfully synced.", u_code, period_iso)
+                            stats["units_synced"] += 1
+                        except FileNotFoundError:
+                            logger.debug("Unit %s bill for %s not published yet (404).", u_code, period_iso)
+                            stats["units_not_published"] += 1
+                        except Exception as exc:
+                            logger.error("❌ Failed processing unit %s for %s: %s", u_code, period_iso, format_error_message(exc))
+                            stats["units_failed"] += 1
 
         logger.info("==================================================")
         logger.info("📊 EXTRACTION PIPELINE SUMMARY")

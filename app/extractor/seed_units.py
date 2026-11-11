@@ -24,56 +24,50 @@ def seed_units_from_csv(
     csv_path: Path | str | None = None,
     db: Session | None = None,
 ) -> int:
-    """Reads mapping CSV and bulk upserts all 420 apartments into the units table."""
-    resolved_path = Path(csv_path) if csv_path else _DEFAULT_CSV
+    """Reads mapping CSV and bulk upserts all apartments into the units table."""
+    path = Path(csv_path) if csv_path else _DEFAULT_CSV
+    if not path.is_file():
+        path = Path("/app/docs/Mapeo Deptos Sierra Plaza.csv")
+    if not path.is_file():
+        logger.error("Mapping CSV not found at %s", path)
+        return 0
 
-    if not resolved_path.exists():
-        fallback_container = Path("/app/docs/Mapeo Deptos Sierra Plaza.csv")
-        fallback_local = Path("backend/docs/Mapeo Deptos Sierra Plaza.csv")
-        if fallback_container.exists():
-            resolved_path = fallback_container
-        elif fallback_local.exists():
-            resolved_path = fallback_local
-        else:
-            logger.error("Mapping CSV not found at %s", resolved_path)
-            return 0
+    session = db or SessionLocal()
+    try:
+        # Preload all existing units in 1 query to avoid 400+ sequential roundtrips
+        existing = {u.unit_code: u for u in session.scalars(select(UnitModel))}
+        count = 0
 
-    count = 0
-    with open(resolved_path, mode="r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-
-        session = db or SessionLocal()
-        try:
-            for row in reader:
+        with open(path, mode="r", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
                 unit_code = f"{row['torre']}-{row['depto']}"
-                stmt = select(UnitModel).where(UnitModel.unit_code == unit_code)
-                unit = session.scalar(stmt)
+                kastor_id = int(row["id"])
+                unit = existing.get(unit_code)
 
                 if unit:
-                    unit.kastor_id = int(row["id"])
+                    unit.kastor_id = kastor_id
                 else:
-                    unit = UnitModel(
-                        unit_code=unit_code,
-                        tower=row["torre"],
-                        unit_number=int(row["depto"]),
-                        kastor_id=int(row["id"]),
-                        alicuota=None,
+                    session.add(
+                        UnitModel(
+                            unit_code=unit_code,
+                            tower=row["torre"],
+                            unit_number=int(row["depto"]),
+                            kastor_id=kastor_id,
+                            alicuota=None,
+                        )
                     )
-                    session.add(unit)
-
                 count += 1
 
-            session.commit()
-            logger.info("Successfully processed %d units.", count)
-        except Exception as e:
-            session.rollback()
-            logger.error("Seeding failed: %s", e)
-            raise e
-        finally:
-            if db is None:
-                session.close()
-
-    return count
+        session.commit()
+        logger.info("Successfully seeded %d units.", count)
+        return count
+    except Exception as e:
+        session.rollback()
+        logger.error("Seeding failed: %s", e)
+        raise
+    finally:
+        if db is None:
+            session.close()
 
 
 if __name__ == "__main__":

@@ -15,8 +15,8 @@ from backend.app.config import CONFIG
 
 logger = logging.getLogger("backend.extractor.downloader")
 
-KASTOR_BUILDING_URL_TEMPLATE = "https://dag-ms.kastor.cl/edificio_siplaza/minutas/pdf_mail/{year}-{month}"
-KASTOR_UNIT_URL_TEMPLATE = "https://dag-ms.kastor.cl/edificio_siplaza/boletas/boletas/{kastor_id}/{year}/{month}/1"
+KASTOR_BUILDING_URL = "https://dag-ms.kastor.cl/edificio_siplaza/minutas/pdf_mail/{year}-{month}"
+KASTOR_UNIT_URL = "https://dag-ms.kastor.cl/edificio_siplaza/boletas/boletas/{kastor_id}/{year}/{month}/1"
 
 
 class Downloader:
@@ -43,16 +43,7 @@ class Downloader:
         return self._storage_client
 
     def save_pdf(self, pdf_bytes: bytes, destination_path: str) -> str:
-        """Persist PDF bytes to GCS, falling back to local disk if GCS is unavailable.
-
-        Args:
-            pdf_bytes: Raw binary content of the PDF.
-            destination_path: Relative storage path, e.g. 'building/2026-09.pdf'
-                             or 'units/B-504/2026-09.pdf'.
-
-        Returns:
-            The persistent URI ('gs://bucket/path' or absolute local file path).
-        """
+        """Persist PDF bytes to GCS, falling back to local disk if GCS is unavailable."""
         client = self.storage_client
         if client and self._gcs_available:
             try:
@@ -65,25 +56,18 @@ class Downloader:
             except Exception as exc:
                 logger.warning("Failed uploading to GCS (%s). Saving locally.", exc)
 
-        # Local filesystem fallback
         local_target = self.local_dir / destination_path
         local_target.parent.mkdir(parents=True, exist_ok=True)
         local_target.write_bytes(pdf_bytes)
         logger.info("Saved PDF to local disk: %s", local_target)
         return str(local_target.resolve())
 
-    async def download_building_pdf(self, year: int, month: int) -> Tuple[bytes, str]:
-        """Download general building expenses PDF from Kastor.
-
-        URL: https://dag-ms.kastor.cl/edificio_siplaza/minutas/pdf_mail/{year}-{month}
-        Saved as: building/{year}-{month:02d}.pdf
-
-        Returns:
-            Tuple of (pdf_bytes, persistent_uri).
-        """
-        url = KASTOR_BUILDING_URL_TEMPLATE.format(year=year, month=month)
-        destination_path = f"building/{year}-{month:02d}.pdf"
-        return await self._fetch_and_save(url, destination_path)
+    async def download_building_pdf(
+        self, year: int, month: int, client: httpx.AsyncClient | None = None
+    ) -> Tuple[bytes, str]:
+        """Download general building expenses PDF from Kastor."""
+        url = KASTOR_BUILDING_URL.format(year=year, month=month)
+        return await self._fetch_and_save(url, f"building/{year}-{month:02d}.pdf", client)
 
     async def download_unit_pdf(
         self,
@@ -91,33 +75,33 @@ class Downloader:
         unit_code: str,
         year: int,
         month: int,
+        client: httpx.AsyncClient | None = None,
     ) -> Tuple[bytes, str]:
-        """Download unit billing statement ('Nota de Cobro') PDF from Kastor.
+        """Download unit billing statement ('Nota de Cobro') PDF from Kastor."""
+        url = KASTOR_UNIT_URL.format(kastor_id=kastor_id, year=year, month=month)
+        return await self._fetch_and_save(url, f"units/{unit_code}/{year}-{month:02d}.pdf", client)
 
-        URL: https://dag-ms.kastor.cl/edificio_siplaza/boletas/boletas/{kastor_id}/{year}/{month}/1
-        Saved as: units/{unit_code}/{year}-{month:02d}.pdf
-
-        Returns:
-            Tuple of (pdf_bytes, persistent_uri).
-        """
-        url = KASTOR_UNIT_URL_TEMPLATE.format(kastor_id=kastor_id, year=year, month=month)
-        destination_path = f"units/{unit_code}/{year}-{month:02d}.pdf"
-        return await self._fetch_and_save(url, destination_path)
-
-    async def _fetch_and_save(self, url: str, destination_path: str) -> Tuple[bytes, str]:
+    async def _fetch_and_save(
+        self, url: str, destination_path: str, client: httpx.AsyncClient | None = None
+    ) -> Tuple[bytes, str]:
         """Internal helper to stream from Kastor with retry and save to persistent storage."""
+        if client is not None:
+            return await self._do_fetch(client, url, destination_path)
+
         transport = httpx.AsyncHTTPTransport(retries=3)
-        async with httpx.AsyncClient(transport=transport, follow_redirects=True, timeout=30.0) as client:
-            resp = await client.get(url)
-            if resp.status_code == 404:
-                raise FileNotFoundError(f"Document not found (404) for {destination_path}")
-            resp.raise_for_status()
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True, timeout=30.0) as http_client:
+            return await self._do_fetch(http_client, url, destination_path)
 
-            content = resp.content
-            if not content.startswith(b"%PDF"):
-                raise ValueError(
-                    f"Remote source returned non-PDF response (content-type={resp.headers.get('content-type')}) for {destination_path}"
-                )
+    async def _do_fetch(self, client: httpx.AsyncClient, url: str, destination_path: str) -> Tuple[bytes, str]:
+        resp = await client.get(url)
+        if resp.status_code == 404:
+            raise FileNotFoundError(f"Document not found (404) for {destination_path}")
+        resp.raise_for_status()
 
-            saved_uri = self.save_pdf(content, destination_path)
-            return content, saved_uri
+        if not resp.content.startswith(b"%PDF"):
+            raise ValueError(
+                f"Remote source returned non-PDF response (content-type={resp.headers.get('content-type')}) for {destination_path}"
+            )
+
+        saved_uri = self.save_pdf(resp.content, destination_path)
+        return resp.content, saved_uri

@@ -249,3 +249,48 @@ def test_save_unit_bill_to_db_and_auto_populate_alicuota(db_session: Session):
     assert charges[0].charge_name == "Fondo de Indemnizacion"
     assert charges[0].charge_type == "fixed_charge"
     assert charges[0].amount == 2500
+
+
+def test_validate_expense_report():
+    gt = extract_ground_truth(SAMPLE_BUILDING_PDF)
+    # Valid report matching GT period and section totals
+    report = ExpenseReport(
+        issue_date="01/09/2026",
+        sections=[
+            Section(
+                general_topic="Consumos",
+                expense_type="operational",
+                sub_topics=[SubTopic(name="Agua", value=gt.section_totals.get("Consumos", 0))],
+            ),
+            Section(
+                general_topic="Remuneraciones",
+                expense_type="operational",
+                sub_topics=[SubTopic(name="Sueldos", value=gt.section_totals.get("Remuneraciones", 0))],
+            ),
+        ],
+    )
+    val = validate_expense_report(report, gt)
+    # Expect missing other sections since only 2 were populated
+    assert not val.is_valid
+    assert any("Missing section" in err for err in val.errors)
+
+    # Date mismatch error test
+    mismatch_report = ExpenseReport(issue_date="01/01/2025", sections=[])
+    val_mismatch = validate_expense_report(mismatch_report, gt)
+    assert not val_mismatch.is_valid
+    assert any("Billing period date mismatch" in err for err in val_mismatch.errors)
+
+
+def test_validate_unit_bill_report():
+    gt = extract_unit_ground_truth(SAMPLE_UNIT_PDF)
+    report = UnitBillReport(
+        issue_date="01/08/2026",
+        unit_code="B-504",
+        alicuota_total=0.16736,
+        concepts=[ConceptItem(concept="Gasto", amount=gt.declared_dept_subtotal or 0)],
+        consumptions=[ConsumptionItem(item_name="Torre B", previous_reading=0, current_reading=1, consumption=1, unit_rate=1, total=gt.declared_consumo_subtotal or 0)],
+        unit_charges=[UnitChargeItem(charge_name="Fondo de Indemnizacion", charge_type="fixed_charge", amount=2500)],
+    )
+    val = validate_unit_bill_report(report, gt)
+    assert val.is_valid
+    assert len(val.errors) == 0
