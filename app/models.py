@@ -10,6 +10,7 @@ from typing import Any
 import uuid_utils
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -575,3 +576,75 @@ class UnitBillChargeModel(Base):
 
     # Relationships
     unit_bill: Mapped[UnitBillModel] = relationship(back_populates="unit_charges")
+
+
+# ============================================================================
+# Security & Guardrail Enforcement Audit Trail
+# ============================================================================
+
+
+class SecurityAuditLogModel(Base):
+    """Persistent security violation record, 3-strike counter, and 24-hour user lockout ledger."""
+
+    __tablename__ = "security_audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID_TYPE,
+        primary_key=True,
+        default=generate_uuid7,
+    )
+    user_uid: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+        comment="Firebase UID or authenticated user identifier",
+    )
+    user_email: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="Authenticated user email address",
+    )
+    violation_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+        comment="'credential_tampering', 'rbac_unauthorized_access', or 'scope_guard_probe'",
+    )
+    reason: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Detailed audit description of the violation, mismatched claims, or offending query",
+    )
+    strike_number: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+        comment="Strike count within rolling 24h window (1, 2, or 3)",
+    )
+    is_blocked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+        comment="True when this event triggered a 24-hour user block",
+    )
+    blocked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="UTC timestamp until which the user is blocked (now + 24h)",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        Index("idx_sec_audit_uid_blocked", "user_uid", "is_blocked", "blocked_until"),
+        Index("idx_sec_audit_email_blocked", "user_email", "is_blocked", "blocked_until"),
+    )
+

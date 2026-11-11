@@ -8,6 +8,8 @@ FROM python:3.11-slim
 # Prevent Python from writing .pyc files to disk and enable instant unbuffered stdout/stderr logs
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV MPLBACKEND=Agg
+ENV MPLCONFIGDIR=/tmp/matplotlib
 
 # Cloud Run injects $PORT (defaults to 8080)
 ENV PORT=8080

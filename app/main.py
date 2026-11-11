@@ -14,6 +14,8 @@ from backend.app.config import CONFIG
 from backend.app.database import engine, get_db
 from backend.app.models import UnitModel
 from backend.app.extractor.seed_units import seed_units_from_csv
+from backend.app.routes.analytics import router as analytics_router
+from backend.app.routes.chat import router as chat_router
 from backend.app.routes.sync import router as sync_router
 
 logger = logging.getLogger("backend.app")
@@ -50,6 +52,9 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(sync_router, prefix="/api/v1")
+    app.include_router(analytics_router, prefix="/api/v1")
+    app.include_router(chat_router, prefix="/api")
+    app.include_router(chat_router, prefix="/api/v1")
 
     @app.get(
         "/",
