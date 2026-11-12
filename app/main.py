@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.app.config import CONFIG
 from backend.app.database import engine, get_db
 from backend.app.models import UnitModel
+from backend.app.observability import flush_telemetry, setup_langsmith_environment
 from backend.app.extractor.seed_units import seed_units_from_csv
 from backend.app.routes.analytics import router as analytics_router
 from backend.app.routes.chat import router as chat_router
@@ -26,6 +27,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifespan context manager for application startup and shutdown."""
     logger.info("Starting Building Analytics Backend service...")
 
+    # Initialize LangSmith environment variables and tracing
+    setup_langsmith_environment()
+
     # Auto-seed units if empty (graceful non-blocking check on container boot)
     try:
         with next(get_db()) as db:
@@ -38,7 +42,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
     logger.info("Shutting down Building Analytics Backend service.")
+    flush_telemetry()
     engine.dispose()
+
 
 
 

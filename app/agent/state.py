@@ -171,7 +171,11 @@ class SupervisorTurnResult(BaseModel):
     thread_id: Optional[str] = Field(
         default=None, description="Analytics thread_id when paused for clarification"
     )
+    run_id: Optional[str] = Field(
+        default=None, description="LangSmith trace execution run ID"
+    )
     security_violation_type: Optional[str] = Field(
+
         default=None,
         description="Internal indicator if this turn triggered an RBAC or Scope Guard strike",
     )
@@ -192,6 +196,8 @@ class SupervisorState(TypedDict, total=False):
     clarification_choice: Optional[str]
     user_context: UserContext
     focus: FocusContext
+    conversation_id: Optional[str]
     decision: Optional[SupervisorDecision]
+
     tool_output: Optional[dict[str, Any]]
     turn_result: Optional[SupervisorTurnResult]

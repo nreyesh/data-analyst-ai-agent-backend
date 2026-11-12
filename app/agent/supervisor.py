@@ -6,10 +6,13 @@ import logging
 from pathlib import Path
 import re
 from typing import Any, Callable
+import uuid
 from google import genai
 from google.genai import types
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
+from langsmith import traceable
+from langsmith.run_helpers import get_current_run_tree
 
 from backend.app.agent.analytics.config import get_analytics_settings
 from backend.app.agent.analytics.gateway_client import query_data_gateway
@@ -690,8 +693,9 @@ def supervisor_router_node(
             response = generate_content_with_fallback(
                 client=active_llm_client,
                 contents=[context_prompt],
-                config=config,
+                generation_config=config,
             )
+
             decision = SupervisorDecision.model_validate_json(response.text)
 
             # If an analytics thread was paused and LLM determined the user answered it
@@ -957,7 +961,9 @@ def execute_tool_node(
             resume_choice=effective_resume_choice,
             workflow_fn=workflow_fn,
             status_callback=status_callback,
+            conversation_id=state.get("conversation_id"),
         )
+
         focus.last_route = "run_deep_financial_analysis"
         effective_tool_unit = tool_out.get("unit_code")
         if decision.knowledge_domain == "cross_domain":
@@ -1080,12 +1086,14 @@ def _normalize_message_list(raw_messages: list[Any] | None) -> list[BaseMessage]
     return normalized
 
 
+@traceable(name="supervisor_turn", run_type="chain")
 def run_supervisor_turn(
     user_message: str,
     user_context: UserContext,
     messages: list[Any] | None = None,
     focus: FocusContext | None = None,
     clarification_choice: str | None = None,
+    conversation_id: str | None = None,
     llm_client: genai.Client | None = None,
     http_client: Any | None = None,
     workflow_fn: Callable[..., Any] | None = None,
@@ -1098,6 +1106,18 @@ def run_supervisor_turn(
     """
     prior_messages = _normalize_message_list(messages)[-MAX_EPHEMERAL_MESSAGES:]
     active_focus = focus or FocusContext()
+    active_conversation_id = conversation_id or str(uuid.uuid4())
+
+    # Attach LangSmith trace run metadata & thread context
+    run_tree = get_current_run_tree()
+    active_run_id = str(run_tree.id) if run_tree is not None else str(uuid.uuid4())
+    if run_tree is not None:
+        run_tree.metadata["thread_id"] = active_conversation_id
+        run_tree.metadata["session_id"] = active_conversation_id
+        run_tree.metadata["user_uid"] = user_context.uid
+        run_tree.metadata["role"] = user_context.role
+        if user_context.knowledge_domain:
+            run_tree.metadata["domain"] = user_context.knowledge_domain
 
     compiled = build_supervisor_graph(
         llm_client=llm_client,
@@ -1112,13 +1132,27 @@ def run_supervisor_turn(
         "clarification_choice": clarification_choice,
         "user_context": user_context,
         "focus": active_focus,
+        "conversation_id": active_conversation_id,
         "decision": None,
         "tool_output": None,
         "turn_result": None,
     }
 
-    final_state = compiled.invoke(initial_state)
+
+    run_config: dict[str, Any] = {
+        "configurable": {"thread_id": active_conversation_id},
+        "metadata": {
+            "thread_id": active_conversation_id,
+            "session_id": active_conversation_id,
+            "user_uid": user_context.uid,
+            "role": user_context.role,
+        },
+        "tags": ["supervisor-turn", f"role:{user_context.role}"],
+    }
+
+    final_state = compiled.invoke(initial_state, config=run_config)
     turn_result: SupervisorTurnResult = final_state["turn_result"]
+    turn_result.run_id = active_run_id
     updated_messages = list(final_state.get("messages") or [])[-MAX_EPHEMERAL_MESSAGES:]
     updated_focus: FocusContext = final_state.get("focus") or turn_result.focus
 

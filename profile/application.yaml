@@ -20,3 +20,9 @@ database:
   pool_recycle: 1800
   pool_timeout: 30
   pool_pre_ping: true
+
+telemetry:
+  enabled: true
+  project: "building-analytics-local"
+  endpoint: "https://api.smith.langchain.com"
+

@@ -7,8 +7,10 @@ import logging
 from pathlib import Path
 import re
 from typing import Any, Callable
+from langsmith import traceable
 
 from backend.app.agent.analytics.tools.building_tools import (
+
     get_building_summary,
     get_system_diagnostics,
 )
@@ -118,6 +120,7 @@ def _is_cross_unit_cohort_query(query: str) -> bool:
     )
 
 
+@traceable(name="lookup_unit_bill", run_type="tool")
 def lookup_unit_bill(
     user_context: UserContext,
     unit_code: str | None = None,
@@ -125,6 +128,7 @@ def lookup_unit_bill(
     query_text: str = "",
     client: Any | None = None,
 ) -> dict[str, Any]:
+
     """Fast-path apartment unit bill snapshot lookup with deterministic RBAC enforcement."""
     norm_requested = _normalize_unit(unit_code)
 
@@ -237,11 +241,13 @@ def lookup_unit_bill(
     }
 
 
+@traceable(name="lookup_building_summary", run_type="tool")
 def lookup_building_summary(
     user_context: UserContext,
     period_date: str | None = None,
     client: Any | None = None,
 ) -> dict[str, Any]:
+
     """Fast-path macro building expense report lookup (permitted for both admin and resident)."""
     _ = user_context  # Macro building totals are public to all co-owners under Ley 21.442
     data = get_building_summary(period_date=period_date, client=client)
@@ -288,10 +294,12 @@ def lookup_building_summary(
     }
 
 
+@traceable(name="check_system_status", run_type="tool")
 def check_system_status(
     user_context: UserContext,
     client: Any | None = None,
 ) -> dict[str, Any]:
+
     """Admin-only system diagnostics and database synchronization verification."""
     if user_context.role != "admin":
         logger.warning(
@@ -333,6 +341,7 @@ def check_system_status(
     }
 
 
+@traceable(name="lookup_spend_evolution", run_type="tool")
 def lookup_spend_evolution(
     user_context: UserContext,
     knowledge_domain: str = "building",
@@ -342,6 +351,7 @@ def lookup_spend_evolution(
     query_text: str = "",
     client: Any | None = None,
 ) -> dict[str, Any]:
+
     """Fast-path deterministic time-series spend evolution with RBAC and direct Matplotlib chart generation."""
     norm_requested = _normalize_unit(unit_code)
 
@@ -521,6 +531,7 @@ def lookup_spend_evolution(
     }
 
 
+@traceable(name="run_deep_financial_analysis", run_type="tool")
 def run_deep_financial_analysis(
     user_context: UserContext,
     query: str,
@@ -530,7 +541,9 @@ def run_deep_financial_analysis(
     resume_choice: str | None = None,
     workflow_fn: Callable[..., Any] | None = None,
     status_callback: Callable[[str], None] | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
+
     """Execute the 9-node Analytics LangGraph state machine with deterministic RBAC tenant scoping."""
     norm_requested = _normalize_unit(unit_code)
 
@@ -587,8 +600,11 @@ def run_deep_financial_analysis(
         kwargs["knowledge_domain"] = knowledge_domain
     if "status_callback" in sig.parameters:
         kwargs["status_callback"] = status_callback
+    if conversation_id is not None and ("conversation_id" in sig.parameters or has_var_kw):
+        kwargs["conversation_id"] = conversation_id
 
     result = runner(**kwargs)
+
 
     if result.needs_clarification:
         step_name = "Revisión inicial completada"

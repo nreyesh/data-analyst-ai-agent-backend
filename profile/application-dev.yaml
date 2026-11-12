@@ -16,3 +16,7 @@ database:
 
 storage:
   bucket: "building-analytics-data-dev"
+
+telemetry:
+  project: "building-analytics-dev"
+

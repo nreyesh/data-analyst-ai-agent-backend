@@ -330,6 +330,7 @@ def run_analysis(
     target_unit: str | None = None,
     knowledge_domain: Literal["building", "unit", "cross_domain"] | None = None,
     status_callback: Callable[[str], None] | None = None,
+    conversation_id: str | None = None,
 ) -> AnalyticsResult:
     """Execute end-to-end analytical question answering, supporting checkpointed clarification pause/resume."""
     settings = get_analytics_settings()
@@ -342,9 +343,15 @@ def run_analysis(
     graph = build_analytics_graph()
     run_config: dict[str, Any] = {
         "configurable": {"thread_id": active_thread_id},
+        "metadata": {
+            "thread_id": conversation_id or active_thread_id,
+            "session_id": conversation_id or active_thread_id,
+            "analytics_thread_id": active_thread_id,
+        },
         "run_name": f"Analytics: {query[:40]}",
         "tags": ["analytics-graph"],
     }
+
 
     if resume_choice is not None:
         if status_callback:

@@ -10,7 +10,10 @@ from typing import Any
 from google import genai
 from google.genai import types
 from langgraph.types import interrupt
+from langsmith import traceable
+from langsmith.run_helpers import get_current_run_tree
 from pydantic import BaseModel, Field
+
 
 from backend.app.agent.analytics.config import get_analytics_settings
 from backend.app.agent.analytics.gateway_client import (
@@ -44,15 +47,19 @@ def get_gemini_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+@traceable(name="gemini_generate_content", run_type="llm")
 def generate_content_with_fallback(
     client: genai.Client,
     contents: list[Any],
-    config: types.GenerateContentConfig,
+    generation_config: types.GenerateContentConfig | None = None,
+    **kwargs: Any,
 ) -> Any:
-    """Execute Gemini generate_content across primary and fallback models."""
+    """Execute Gemini generate_content across primary and fallback models with LangSmith telemetry."""
+    effective_config = generation_config if generation_config is not None else kwargs.get("config")
     settings = get_analytics_settings()
     candidate_models = settings.get_candidate_models()
     last_error: Exception | None = None
+    run_tree = get_current_run_tree()
 
     for idx, current_model in enumerate(candidate_models):
         if idx > 0:
@@ -66,10 +73,25 @@ def generate_content_with_fallback(
             response = client.models.generate_content(
                 model=current_model,
                 contents=contents,
-                config=config,
+                config=effective_config,
             )
+
             if not response.text:
                 raise RuntimeError(f"Model '{current_model}' returned empty response.")
+
+            # Record model and token usage metadata on the LangSmith run tree
+            if run_tree is not None:
+                run_tree.metadata["selected_model"] = current_model
+                run_tree.metadata["fallback_attempts"] = idx
+                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                    usage = response.usage_metadata
+                    p_toks = getattr(usage, "prompt_token_count", 0) or 0
+                    c_toks = getattr(usage, "candidates_token_count", 0) or 0
+                    tot_toks = getattr(usage, "total_token_count", p_toks + c_toks) or 0
+                    run_tree.metadata["input_tokens"] = p_toks
+                    run_tree.metadata["output_tokens"] = c_toks
+                    run_tree.metadata["total_tokens"] = tot_toks
+
             return response
         except Exception as exc:
             last_error = exc
@@ -79,6 +101,7 @@ def generate_content_with_fallback(
         f"All configured analytics models failed. Attempted models: {candidate_models}. "
         f"Last error: {last_error}"
     ) from last_error
+
 
 
 class SQLCoderOutput(BaseModel):
@@ -135,8 +158,9 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
     response = generate_content_with_fallback(
         client=gemini_client,
         contents=contents,
-        config=config,
+        generation_config=config,
     )
+
 
     plan = IntentPlan.model_validate_json(response.text)
 
@@ -388,8 +412,9 @@ def trajectory_evaluator_node(
     response = generate_content_with_fallback(
         client=gemini_client,
         contents=contents,
-        config=config,
+        generation_config=config,
     )
+
 
     evaluation = TrajectoryEvaluation.model_validate_json(response.text)
 
@@ -522,8 +547,9 @@ def sql_coder_node(state: DataAnalystState, client: genai.Client | None = None) 
     response = generate_content_with_fallback(
         client=gemini_client,
         contents=contents,
-        config=config,
+        generation_config=config,
     )
+
 
     output = SQLCoderOutput.model_validate_json(response.text)
 
@@ -742,8 +768,9 @@ def visualizer_node(state: DataAnalystState, client: genai.Client | None = None)
     response = generate_content_with_fallback(
         client=gemini_client,
         contents=contents,
-        config=config,
+        generation_config=config,
     )
+
 
     output = VisualizerOutput.model_validate_json(response.text)
     logger.info("Visualizer generated script: length=%d", len(output.python_code))
@@ -867,8 +894,9 @@ def synthesizer_node(state: DataAnalystState, client: genai.Client | None = None
     response = generate_content_with_fallback(
         client=gemini_client,
         contents=contents,
-        config=config,
+        generation_config=config,
     )
+
 
     raw_markdown = response.text or "No se pudo generar la síntesis del reporte."
     markdown = re.sub(r"!\[[^\]]*\]\([^)]+\)\n?", "", raw_markdown).strip()

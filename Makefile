@@ -1,6 +1,7 @@
-.PHONY: help install test coverage coverage-html run seed clean
+.PHONY: help install test coverage coverage-html eval run seed clean
 
 PYTHON ?= python3
+
 PIP ?= pip
 PYTEST ?= pytest
 
@@ -23,7 +24,11 @@ coverage-html: ## Generate interactive browser coverage report in htmlcov/
 	PYTHONPATH=. $(PYTEST) tests --cov=app --cov-report=html
 	@echo "Coverage HTML report generated at htmlcov/index.html"
 
+eval: ## Run standalone LangSmith golden evaluation benchmark
+	PYTHONPATH=. $(PYTHON) tests/eval/run_evals.py
+
 run: ## Run local FastAPI development server
+
 	uvicorn app.main:app --reload --port 8000
 
 seed: ## Seed all 420 apartments into database from CSV

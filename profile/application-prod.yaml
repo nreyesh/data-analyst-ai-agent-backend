@@ -14,3 +14,7 @@ database:
 
 storage:
   bucket: "building-analytics-data-prod"
+
+telemetry:
+  project: "building-analytics-prod"
+
