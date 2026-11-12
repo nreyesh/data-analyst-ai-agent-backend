@@ -106,6 +106,7 @@ def record_feedback(
     try:
         client.create_feedback(
             run_id=run_id,
+            trace_id=run_id,
             key=key,
             score=score,
             value=value,
@@ -117,3 +118,7 @@ def record_feedback(
     except Exception as exc:
         logger.warning("Failed to record LangSmith feedback for run %s (fail-open): %s", run_id, exc)
         return False
+
+
+# Auto-configure telemetry environment on module load if credentials are present
+setup_langsmith_environment()
