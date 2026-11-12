@@ -401,7 +401,9 @@ def _apply_entity_and_scope_guards(
                 "unit" if user_context.role == "resident" else "building"
             )
 
-    if decision.knowledge_domain == "building":
+    if decision.is_unauthorized_unit_access and decision.unauthorized_target_unit:
+        decision.unit_code = decision.unauthorized_target_unit
+    elif decision.knowledge_domain == "building":
         decision.unit_code = None
     elif decision.knowledge_domain in ("unit", "cross_domain") and not decision.unit_code:
         decision.unit_code = (
@@ -840,6 +842,8 @@ def execute_tool_node(
             period_date=decision.period_date,
             query_text=decision.resolved_query or user_msg,
             client=http_client,
+            is_unauthorized_unit_access=decision.is_unauthorized_unit_access,
+            unauthorized_target_unit=decision.unauthorized_target_unit,
         )
         if not tool_out.get("error"):
             focus.last_domain = "unit"
@@ -893,6 +897,8 @@ def execute_tool_node(
             time_scope=decision.time_scope,
             query_text=decision.resolved_query or user_msg,
             client=http_client,
+            is_unauthorized_unit_access=decision.is_unauthorized_unit_access,
+            unauthorized_target_unit=decision.unauthorized_target_unit,
         )
 
         focus.last_route = "lookup_spend_evolution"
@@ -962,6 +968,8 @@ def execute_tool_node(
             workflow_fn=workflow_fn,
             status_callback=status_callback,
             conversation_id=state.get("conversation_id"),
+            is_unauthorized_unit_access=decision.is_unauthorized_unit_access,
+            unauthorized_target_unit=decision.unauthorized_target_unit,
         )
 
         focus.last_route = "run_deep_financial_analysis"
@@ -972,7 +980,7 @@ def execute_tool_node(
         elif effective_tool_unit:
             focus.last_domain = "unit"
             focus.last_unit = effective_tool_unit
-        else:
+        elif not tool_out.get("unauthorized"):
             focus.last_domain = "building"
             if decision.unit_code is None:
                 focus.last_unit = None

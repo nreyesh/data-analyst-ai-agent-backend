@@ -137,6 +137,14 @@ class SupervisorDecision(BaseModel):
         default=None,
         description="Friendly Spanish response when route is 'direct_response'.",
     )
+    is_unauthorized_unit_access: bool = Field(
+        default=False,
+        description="True ONLY if user_context.role is 'resident' and the user explicitly requests data, bills, or comparisons for an apartment unit or tower OTHER than their assigned unit_code. False if querying their own unit, building-wide expenses, or general concepts.",
+    )
+    unauthorized_target_unit: Optional[str] = Field(
+        default=None,
+        description="The unauthorized unit or tower code requested by the resident (e.g. 'A-101', 'Torre A'). None if authorized.",
+    )
 
 
 class SupervisorTurnResult(BaseModel):

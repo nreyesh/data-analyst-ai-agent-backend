@@ -63,51 +63,6 @@ def _normalize_unit(unit_code: str | None) -> str | None:
     return raw
 
 
-def _detect_unauthorized_unit_in_text(query: str, assigned_unit: str) -> str | None:
-    """Inspect query text for explicit references to an apartment unit other than assigned_unit."""
-    norm_assigned = _normalize_unit(assigned_unit) or assigned_unit.upper()
-    assigned_parts = norm_assigned.split("-")
-    assigned_tower = assigned_parts[0] if len(assigned_parts) == 2 else ""
-    assigned_num = assigned_parts[1] if len(assigned_parts) == 2 else norm_assigned
-
-    # 1. Check explicit TOWER-NUM or NUM-TOWER patterns (e.g. A-102, 102B, A-504)
-    for m in re.finditer(r"\b([A-Za-z]{1,2})\s*[-]\s*(\d{1,4})\b", query):
-        candidate = f"{m.group(1).upper()}-{int(m.group(2))}"
-        if candidate != norm_assigned and str(int(m.group(2))) != assigned_num:
-            return candidate
-        if assigned_tower and m.group(1).upper() != assigned_tower:
-            return candidate
-
-    for m in re.finditer(r"\b(\d{1,4})\s*([A-Za-z]{1,2})\b", query):
-        word_after = m.group(2).upper()
-        if word_after in ("M", "K", "B") and int(m.group(1)) > 1900:
-            continue
-        candidate = f"{word_after}-{int(m.group(1))}"
-        if candidate != norm_assigned and str(int(m.group(1))) != assigned_num:
-            return candidate
-        if assigned_tower and word_after != assigned_tower:
-            return candidate
-
-    # 2. Check explicit 'depto/departamento/unidad <num>'
-    for m in re.finditer(r"\b(?:depto|departamento|dpto|unidad)\s*[-#]?\s*(\d{1,4})\s*([A-Za-z])?\b", query, re.I):
-        num = str(int(m.group(1)))
-        tower = (m.group(2) or "").upper()
-        if tower:
-            candidate = f"{tower}-{num}"
-            if candidate != norm_assigned and not (not assigned_tower and num == assigned_num):
-                return candidate
-        elif num != assigned_num:
-            return f"Depto {num}"
-
-    # 3. Check explicit 'torre <X>' if resident is in another tower
-    for m in re.finditer(r"\btorre\s+([A-Za-z])\b", query, re.I):
-        req_tower = m.group(1).upper()
-        if assigned_tower and req_tower != assigned_tower:
-            return f"Torre {req_tower}"
-
-    return None
-
-
 def _is_cross_unit_cohort_query(query: str) -> bool:
     """Detect if a resident query asks for multi-unit rankings or neighbor comparisons."""
     return bool(
@@ -127,6 +82,8 @@ def lookup_unit_bill(
     period_date: str | None = None,
     query_text: str = "",
     client: Any | None = None,
+    is_unauthorized_unit_access: bool = False,
+    unauthorized_target_unit: str | None = None,
 ) -> dict[str, Any]:
 
     """Fast-path apartment unit bill snapshot lookup with deterministic RBAC enforcement."""
@@ -134,34 +91,27 @@ def lookup_unit_bill(
 
     if user_context.role == "resident":
         assigned_unit = _normalize_unit(user_context.unit_code) or ""
-        if norm_requested and norm_requested != assigned_unit:
-            assigned_num = assigned_unit.split("-")[-1]
-            req_num = norm_requested.split("-")[-1]
-            assigned_has_tower = "-" in assigned_unit
-            if norm_requested != assigned_num and not (not assigned_has_tower and req_num == assigned_num):
-                logger.warning(
-                    "RBAC block: Resident '%s' (%s) attempted to query unit '%s'",
-                    user_context.email,
-                    assigned_unit,
-                    norm_requested,
-                )
-                msg = (
-                    f"Acceso denegado: Tu perfil de residente solo está autorizado para "
-                    f"consultar la unidad **{assigned_unit}**."
-                )
-                return {"error": msg, "unauthorized": True, "summary": msg}
+        assigned_num = assigned_unit.split("-")[-1]
+        assigned_has_tower = "-" in assigned_unit
 
-        unauth_in_text = _detect_unauthorized_unit_in_text(query_text, assigned_unit)
-        if unauth_in_text:
+        is_different_unit = False
+        if norm_requested and norm_requested != assigned_unit:
+            req_num = norm_requested.split("-")[-1]
+            if norm_requested != assigned_num and not (not assigned_has_tower and req_num == assigned_num):
+                is_different_unit = True
+
+        if is_unauthorized_unit_access or is_different_unit or unauthorized_target_unit:
+            target_val = unauthorized_target_unit or (norm_requested if is_different_unit else None)
+            target_str = f" (no puedes consultar `{target_val}`)" if target_val else ""
             logger.warning(
-                "RBAC block: Resident '%s' (%s) referenced unauthorized unit '%s' in query",
+                "RBAC block: Resident '%s' (%s) attempted to query unit '%s'",
                 user_context.email,
                 assigned_unit,
-                unauth_in_text,
+                target_val or norm_requested,
             )
             msg = (
                 f"Acceso denegado: Tu perfil de residente solo está autorizado para "
-                f"consultar la unidad **{assigned_unit}** (no puedes consultar `{unauth_in_text}`)."
+                f"consultar la unidad **{assigned_unit}**{target_str}."
             )
             return {"error": msg, "unauthorized": True, "summary": msg}
 
@@ -350,6 +300,8 @@ def lookup_spend_evolution(
     time_scope: str | None = None,
     query_text: str = "",
     client: Any | None = None,
+    is_unauthorized_unit_access: bool = False,
+    unauthorized_target_unit: str | None = None,
 ) -> dict[str, Any]:
 
     """Fast-path deterministic time-series spend evolution with RBAC and direct Matplotlib chart generation."""
@@ -358,28 +310,27 @@ def lookup_spend_evolution(
     if knowledge_domain == "unit":
         if user_context.role == "resident":
             assigned_unit = _normalize_unit(user_context.unit_code) or ""
-            if norm_requested and norm_requested != assigned_unit:
-                assigned_num = assigned_unit.split("-")[-1]
-                req_num = norm_requested.split("-")[-1]
-                assigned_has_tower = "-" in assigned_unit
-                if norm_requested != assigned_num and not (not assigned_has_tower and req_num == assigned_num):
-                    logger.warning(
-                        "RBAC block: Resident '%s' (%s) attempted to query evolution for unit '%s'",
-                        user_context.email,
-                        assigned_unit,
-                        norm_requested,
-                    )
-                    msg = (
-                        f"Acceso denegado: Tu perfil de residente solo está autorizado para "
-                        f"consultar la evolución de la unidad **{assigned_unit}**."
-                    )
-                    return {"error": msg, "unauthorized": True, "summary": msg}
+            assigned_num = assigned_unit.split("-")[-1]
+            assigned_has_tower = "-" in assigned_unit
 
-            unauth_in_text = _detect_unauthorized_unit_in_text(query_text, assigned_unit)
-            if unauth_in_text:
+            is_different_unit = False
+            if norm_requested and norm_requested != assigned_unit:
+                req_num = norm_requested.split("-")[-1]
+                if norm_requested != assigned_num and not (not assigned_has_tower and req_num == assigned_num):
+                    is_different_unit = True
+
+            if is_unauthorized_unit_access or is_different_unit or unauthorized_target_unit:
+                target_val = unauthorized_target_unit or (norm_requested if is_different_unit else None)
+                target_str = f" (no puedes consultar `{target_val}`)" if target_val else ""
+                logger.warning(
+                    "RBAC block: Resident '%s' (%s) attempted to query evolution for unit '%s'",
+                    user_context.email,
+                    assigned_unit,
+                    target_val or norm_requested,
+                )
                 msg = (
                     f"Acceso denegado: Tu perfil de residente solo está autorizado para "
-                    f"consultar la evolución de la unidad **{assigned_unit}** (no puedes consultar `{unauth_in_text}`)."
+                    f"consultar la evolución de la unidad **{assigned_unit}**{target_str}."
                 )
                 return {"error": msg, "unauthorized": True, "summary": msg}
 
@@ -542,6 +493,8 @@ def run_deep_financial_analysis(
     workflow_fn: Callable[..., Any] | None = None,
     status_callback: Callable[[str], None] | None = None,
     conversation_id: str | None = None,
+    is_unauthorized_unit_access: bool = False,
+    unauthorized_target_unit: str | None = None,
 ) -> dict[str, Any]:
 
     """Execute the 9-node Analytics LangGraph state machine with deterministic RBAC tenant scoping."""
@@ -549,22 +502,27 @@ def run_deep_financial_analysis(
 
     if user_context.role == "resident":
         assigned_unit = _normalize_unit(user_context.unit_code) or ""
-        if norm_requested and norm_requested != assigned_unit:
-            assigned_num = assigned_unit.split("-")[-1]
-            req_num = norm_requested.split("-")[-1]
-            assigned_has_tower = "-" in assigned_unit
-            if norm_requested != assigned_num and not (not assigned_has_tower and req_num == assigned_num):
-                msg = (
-                    f"Acceso denegado: Tu perfil de residente solo está autorizado para "
-                    f"analizar la unidad **{assigned_unit}**."
-                )
-                return {"error": msg, "unauthorized": True, "summary": msg}
+        assigned_num = assigned_unit.split("-")[-1]
+        assigned_has_tower = "-" in assigned_unit
 
-        unauth_in_text = _detect_unauthorized_unit_in_text(query, assigned_unit)
-        if unauth_in_text:
+        is_different_unit = False
+        if norm_requested and norm_requested != assigned_unit:
+            req_num = norm_requested.split("-")[-1]
+            if norm_requested != assigned_num and not (not assigned_has_tower and req_num == assigned_num):
+                is_different_unit = True
+
+        if is_unauthorized_unit_access or is_different_unit or unauthorized_target_unit:
+            target_val = unauthorized_target_unit or (norm_requested if is_different_unit else None)
+            target_str = f" (no puedes consultar `{target_val}`)" if target_val else ""
+            logger.warning(
+                "RBAC block: Resident '%s' (%s) attempted to analyze unauthorized unit '%s'",
+                user_context.email,
+                assigned_unit,
+                target_val or norm_requested,
+            )
             msg = (
                 f"Acceso denegado: Tu perfil de residente solo está autorizado para "
-                f"analizar la unidad **{assigned_unit}** (no puedes consultar `{unauth_in_text}`)."
+                f"analizar la unidad **{assigned_unit}**{target_str}."
             )
             return {"error": msg, "unauthorized": True, "summary": msg}
 

@@ -79,5 +79,16 @@ Debes seleccionar exactamente una de las siguientes rutas en tu decisión estruc
    - Si existe una aclaración pendiente y el usuario envía un mensaje de texto libre:
      - Si el mensaje **responde a la aclaración pendiente** (por ejemplo, elige una opción, indica un período, o escribe un código de departamento como `"B-504"` cuando se le pidió la unidad), marca `resume_pending_thread = true` y resuelve la consulta combinando `pending_clarification_query` con la respuesta del usuario.
      - Si el mensaje **cambia completamente de tema** (por ejemplo, pregunta *"¿Cuál es el estado del sistema?"* o *"¿Cuánto debo pagar este mes?"* ignorando la pregunta pendiente), marca `resume_pending_thread = false` y clasifica la nueva pregunta normalmente.
-3. **Regla de Seguridad RBAC**:
-   - Si un usuario con rol `resident` menciona explícitamente otra unidad distinta a la suya (`user_context.unit_code`), igual enruta a `lookup_unit_bill` o `run_deep_financial_analysis` pasando el `unit_code` mencionado en el texto para que la compuerta de seguridad determinista en Python registre y bloquee el acceso no autorizado.
+3. **Regla de Seguridad RBAC y Control de Acceso para Residentes**:
+   - Conoces el rol (`user_context.role`) y la unidad asignada al residente (`user_context.unit_code`, ej. "B-504").
+   - **Acceso No Autorizado**: Si un usuario con rol `resident` solicita explícitamente información, boletas, lecturas o comparaciones de un departamento o torre DISTINTO al suyo (ej. *"Muéstrame la boleta del departamento A-101"*, *"¿Cuánto pagó el 102B?"*, *"gastos de la Torre A"*):
+     - Asigna `is_unauthorized_unit_access = true`.
+     - Asigna `unauthorized_target_unit = "<unidad o torre no autorizada>"` (ej. `"A-101"`, `"Torre A"`).
+     - Asigna `unit_code = "<unidad o torre no autorizada>"`.
+     - Enruta a `lookup_unit_bill` o `run_deep_financial_analysis` para que la compuerta determinista de Python ejecute el bloqueo y registre la auditoría.
+   - **Consultas Autorizadas (IMPORTANTE: Distinción de Expresiones Temporales)**:
+     - Si el residente consulta por su propia unidad (ej. *"mi gasto común"*, *"mi departamento B-504"*), gastos generales del edificio (*"gasto común total del edificio"*), o menciona años, meses y conjunciones temporales (ej. *"en junio de 2026 y octubre de 2026"*, *"evolución de 2025 a 2026"*, *"gastos del 2026 o 2025"*):
+       - Asigna `is_unauthorized_unit_access = false`.
+       - Asigna `unauthorized_target_unit = null`.
+       - Asigna `unit_code = user_context.unit_code` (o `null` si es sobre el edificio completo).
+       - Expresiones como `"2026 y"`, `"2025 o"`, `"de 2026"` son EXPRESIONES TEMPORALES Y CONJUNCIONES, NUNCA unidades ni torres.
