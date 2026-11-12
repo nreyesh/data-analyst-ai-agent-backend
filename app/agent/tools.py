@@ -391,13 +391,19 @@ def lookup_spend_evolution(
     )
 
     if data.get("series_type") == "not_found" or not data.get("rows"):
-        cat_info = get_expense_concept_catalog(client=client)
-        available_cats = ", ".join(f"`{c}`" for c in cat_info.get("building_categories", [])[:6])
-        concept_display = target_concept or "el concepto consultado"
-        msg = (
-            f"No se encontraron registros de cobro para «**{concept_display}**» en los períodos disponibles.\n\n"
-            f"Algunas de las categorías disponibles para consultar son: {available_cats}."
-        )
+        if knowledge_domain == "unit":
+            msg = (
+                f"No se encontraron registros de cobro para la unidad **{effective_unit}** "
+                f"en los períodos consultados."
+            )
+        else:
+            cat_info = get_expense_concept_catalog(client=client)
+            available_cats = ", ".join(f"`{c}`" for c in cat_info.get("building_categories", [])[:6])
+            concept_display = target_concept or "el concepto consultado"
+            msg = (
+                f"No se encontraron registros de cobro para «**{concept_display}**» en los períodos disponibles.\n\n"
+                f"Algunas de las categorías disponibles para consultar son: {available_cats}."
+            )
         return {
             "error": "Concept not found",
             "summary": msg,

@@ -217,6 +217,55 @@ def test_spend_evolution_and_base64_chart_delivery(
     if out_hw["chart_file_path"]:
         Path(out_hw["chart_file_path"]).unlink(missing_ok=True)
 
+    # 4. Unit spend evolution without tower prefix ("504") and natural phrasings
+    out_unit_num = lookup_spend_evolution(
+        user_context=resident_b504,
+        knowledge_domain="unit",
+        unit_code="504",
+        target_concept="Gasto Común",
+        client=seeded_db,
+    )
+    assert "error" not in out_unit_num
+    assert "Cuota Base + Fondos" in out_unit_num["summary"]
+    if out_unit_num["chart_file_path"]:
+        Path(out_unit_num["chart_file_path"]).unlink(missing_ok=True)
+
+    out_unit_phrase = lookup_spend_evolution(
+        user_context=resident_b504,
+        knowledge_domain="unit",
+        unit_code="504",
+        target_concept="gasto de mi unidad",
+        client=seeded_db,
+    )
+    assert "error" not in out_unit_phrase
+    assert "Cuota Base + Fondos" in out_unit_phrase["summary"]
+    if out_unit_phrase["chart_file_path"]:
+        Path(out_unit_phrase["chart_file_path"]).unlink(missing_ok=True)
+
+    # 5. Operational spend: Unit vs Building
+    out_unit_op = lookup_spend_evolution(
+        user_context=resident_b504,
+        knowledge_domain="unit",
+        unit_code="504",
+        target_concept="gasto operacional",
+        client=seeded_db,
+    )
+    assert "error" not in out_unit_op
+    assert "Cuota Base + Fondos" in out_unit_op["summary"]
+    if out_unit_op["chart_file_path"]:
+        Path(out_unit_op["chart_file_path"]).unlink(missing_ok=True)
+
+    out_bldg_op = lookup_spend_evolution(
+        user_context=resident_b504,
+        knowledge_domain="building",
+        target_concept="gasto operacional",
+        client=seeded_db,
+    )
+    assert "error" not in out_bldg_op
+    assert "Gasto Operacional" in out_bldg_op["summary"]
+    if out_bldg_op["chart_file_path"]:
+        Path(out_bldg_op["chart_file_path"]).unlink(missing_ok=True)
+
 
 def test_rbac_enforcement_across_all_tools(
     seeded_db: Session,

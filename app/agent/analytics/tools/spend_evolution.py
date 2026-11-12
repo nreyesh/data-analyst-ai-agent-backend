@@ -51,6 +51,31 @@ def _sanitize_sql_string(val: str) -> str:
     return cleaned.replace("'", "''")
 
 
+def _parse_unit_filter(unit_code: str | None) -> tuple[str, str]:
+    """Parse unit code into SQL filter and normalized representation, supporting both 'B-504' and '504'."""
+    norm_unit = unit_code.strip().upper() if unit_code else ""
+    if not norm_unit:
+        return "WHERE 1=0", ""
+    parts = norm_unit.split("-")
+    tower_filter = f"AND u.tower = '{parts[0]}'" if len(parts) == 2 and not parts[0].isdigit() else ""
+    num_val = 0
+    if len(parts) == 2 and parts[1].isdigit():
+        num_val = int(parts[1])
+    elif len(parts) == 1 and parts[0].isdigit():
+        num_val = int(parts[0])
+    else:
+        m = re.search(r"(\d{1,4})", norm_unit)
+        if m:
+            num_val = int(m.group(1))
+        m_t = re.search(r"^([A-Z])", norm_unit)
+        if m_t and not tower_filter:
+            tower_filter = f"AND u.tower = '{m_t.group(1)}'"
+
+    if num_val:
+        return f"WHERE u.unit_number = {num_val} {tower_filter}".strip(), norm_unit
+    return f"WHERE b.unit_code = '{norm_unit}'", norm_unit
+
+
 def get_expense_concept_catalog(client: Any | None = None) -> dict[str, list[str]]:
     """Retrieve distinct building categories and unit concepts/charges from Data Gateway.
 
@@ -199,16 +224,11 @@ def get_spend_evolution_data(
         scope_clause = f"WHERE r.period_date >= '{time_scope.strip()}'"
 
     clean_concept = _sanitize_sql_string(target_concept) if target_concept else None
+    unit_filter, norm_unit = _parse_unit_filter(unit_code)
+    year_clause = f"AND p.period_year = {int(time_scope.strip())}" if time_scope and time_scope.strip().isdigit() else ""
 
     # Case 1: Unit Hot Water Consumption (m³ and CLP)
     if knowledge_domain == "unit" and clean_concept and "agua caliente" in clean_concept.lower():
-        norm_unit = unit_code.strip().upper() if unit_code else ""
-        parts = norm_unit.split("-")
-        tower_filter = f"AND u.tower = '{parts[0]}'" if len(parts) == 2 else ""
-        num_val = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
-        unit_filter = f"WHERE u.unit_number = {num_val} {tower_filter}" if num_val else f"WHERE b.unit_code = '{norm_unit}'"
-
-        year_clause = f"AND p.period_year = {int(time_scope.strip())}" if time_scope and time_scope.strip().isdigit() else ""
         sql = (
             f"SELECT b.period_date, c.consumption AS volume_m3, c.total_amount AS amount_clp, "
             f"c.unit_rate, c.previous_reading, c.current_reading "
@@ -232,15 +252,52 @@ def get_spend_evolution_data(
             "unit_code": norm_unit,
         }
 
-    # Case 2: Unit Overall Breakdown
-    if knowledge_domain == "unit" and (not clean_concept or clean_concept.lower() in ("gasto comun", "gasto común", "total", "mi gasto")):
-        norm_unit = unit_code.strip().upper() if unit_code else ""
-        parts = norm_unit.split("-")
-        tower_filter = f"AND u.tower = '{parts[0]}'" if len(parts) == 2 else ""
-        num_val = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
-        unit_filter = f"WHERE u.unit_number = {num_val} {tower_filter}" if num_val else f"WHERE b.unit_code = '{norm_unit}'"
+    # Case 2: Unit Specific Charge or Concept (e.g. Multa, Seguro, Interes, Fondo)
+    if knowledge_domain == "unit" and clean_concept:
+        sql = (
+            f"SELECT b.period_date, SUM(c.amount) AS amount_clp, MAX(c.charge_name) AS charge_name "
+            f"FROM unit_bill_charges c "
+            f"JOIN unit_bills b ON c.unit_bill_id = b.id "
+            f"JOIN units u ON b.unit_code = u.unit_code "
+            f"JOIN billing_periods p ON b.period_date = p.period_date "
+            f"{unit_filter} {year_clause} AND LOWER(c.charge_name) LIKE '%{clean_concept.lower()}%' "
+            f"GROUP BY b.period_date ORDER BY b.period_date DESC LIMIT 12;"
+        )
+        rows, err = query_data_gateway(sql=sql, client=client)
+        if rows and not err:
+            rows = list(reversed(rows))
+            metrics = _compute_evolution_metrics(rows, "amount_clp")
+            return {
+                "rows": rows,
+                "metrics": metrics,
+                "series_type": "unit_charge",
+                "concept_name": clean_concept.title(),
+                "unit_code": norm_unit,
+            }
 
-        year_clause = f"AND p.period_year = {int(time_scope.strip())}" if time_scope and time_scope.strip().isdigit() else ""
+        sql_conc = (
+            f"SELECT b.period_date, SUM(c.amount) AS amount_clp, MAX(c.concept_name) AS concept_name "
+            f"FROM unit_bill_concepts c "
+            f"JOIN unit_bills b ON c.unit_bill_id = b.id "
+            f"JOIN units u ON b.unit_code = u.unit_code "
+            f"JOIN billing_periods p ON b.period_date = p.period_date "
+            f"{unit_filter} {year_clause} AND LOWER(c.concept_name) LIKE '%{clean_concept.lower()}%' "
+            f"GROUP BY b.period_date ORDER BY b.period_date DESC LIMIT 12;"
+        )
+        rows_conc, err_conc = query_data_gateway(sql=sql_conc, client=client)
+        if rows_conc and not err_conc:
+            rows_conc = list(reversed(rows_conc))
+            metrics = _compute_evolution_metrics(rows_conc, "amount_clp")
+            return {
+                "rows": rows_conc,
+                "metrics": metrics,
+                "series_type": "unit_concept",
+                "concept_name": clean_concept.title(),
+                "unit_code": norm_unit,
+            }
+
+    # Case 3: Unit Overall Monthly Spend (Default for unit queries without matching sub-item)
+    if knowledge_domain == "unit":
         sql = (
             f"SELECT b.period_date, b.calculated_dept_subtotal, b.calculated_consumo_total, "
             f"b.calculated_unit_subtotal, b.calculated_total_month "
@@ -263,54 +320,16 @@ def get_spend_evolution_data(
             "unit_code": norm_unit,
         }
 
-    # Case 3: Unit Specific Charge or Concept (e.g. Multa, Seguro, Interes, Fondo)
-    if knowledge_domain == "unit" and clean_concept:
-        norm_unit = unit_code.strip().upper() if unit_code else ""
-        sql = (
-            f"SELECT b.period_date, SUM(c.amount) AS amount_clp, MAX(c.charge_name) AS charge_name "
-            f"FROM unit_bill_charges c "
-            f"JOIN unit_bills b ON c.unit_bill_id = b.id "
-            f"WHERE b.unit_code = '{norm_unit}' AND LOWER(c.charge_name) LIKE '%{clean_concept.lower()}%' "
-            f"GROUP BY b.period_date ORDER BY b.period_date DESC LIMIT 12;"
-        )
-        rows, err = query_data_gateway(sql=sql, client=client)
-        if rows and not err:
-            rows = list(reversed(rows))
-            metrics = _compute_evolution_metrics(rows, "amount_clp")
-            return {
-                "rows": rows,
-                "metrics": metrics,
-                "series_type": "unit_charge",
-                "concept_name": clean_concept.title(),
-                "unit_code": norm_unit,
-            }
-
-        sql_conc = (
-            f"SELECT b.period_date, SUM(c.amount) AS amount_clp, MAX(c.concept_name) AS concept_name "
-            f"FROM unit_bill_concepts c "
-            f"JOIN unit_bills b ON c.unit_bill_id = b.id "
-            f"WHERE b.unit_code = '{norm_unit}' AND LOWER(c.concept_name) LIKE '%{clean_concept.lower()}%' "
-            f"GROUP BY b.period_date ORDER BY b.period_date DESC LIMIT 12;"
-        )
-        rows_conc, err_conc = query_data_gateway(sql=sql_conc, client=client)
-        if rows_conc and not err_conc:
-            rows_conc = list(reversed(rows_conc))
-            metrics = _compute_evolution_metrics(rows_conc, "amount_clp")
-            return {
-                "rows": rows_conc,
-                "metrics": metrics,
-                "series_type": "unit_concept",
-                "concept_name": clean_concept.title(),
-                "unit_code": norm_unit,
-            }
-
-    # Case 4: Building Specific Category (expense_sections)
-    if clean_concept:
+    # Case 4: Building Specific Category or Item
+    is_operational_query = bool(clean_concept and "operacional" in clean_concept.lower())
+    if clean_concept and not is_operational_query and clean_concept.lower() not in ("total", "gasto general"):
+        year_filter_sec = f"AND p.period_year = {int(time_scope.strip())}" if time_scope and time_scope.strip().isdigit() else ""
         sql = (
             f"SELECT r.period_date, s.category_name, s.calculated_subtotal AS amount_clp "
             f"FROM expense_sections s "
             f"JOIN expense_reports r ON s.report_id = r.id "
-            f"WHERE LOWER(s.category_name) LIKE '%{clean_concept.lower()}%' "
+            f"JOIN billing_periods p ON r.period_date = p.period_date "
+            f"WHERE LOWER(s.category_name) LIKE '%{clean_concept.lower()}%' {year_filter_sec} "
             f"ORDER BY r.period_date DESC LIMIT 12;"
         )
         rows, err = query_data_gateway(sql=sql, client=client)
@@ -331,7 +350,8 @@ def get_spend_evolution_data(
             f"FROM expense_items i "
             f"JOIN expense_sections s ON i.section_id = s.id "
             f"JOIN expense_reports r ON s.report_id = r.id "
-            f"WHERE LOWER(i.normalized_name) LIKE '%{clean_concept.lower()}%' "
+            f"JOIN billing_periods p ON r.period_date = p.period_date "
+            f"WHERE LOWER(i.normalized_name) LIKE '%{clean_concept.lower()}%' {year_filter_sec} "
             f"GROUP BY r.period_date ORDER BY r.period_date DESC LIMIT 12;"
         )
         rows_item, err_item = query_data_gateway(sql=sql_item, client=client)
@@ -353,7 +373,7 @@ def get_spend_evolution_data(
             "concept_name": clean_concept,
         }
 
-    # Case 5: Building Macro Total Evolution
+    # Case 5: Building Macro Total / Operational Total Evolution
     limit_clause = "LIMIT 12" if not scope_clause else ""
     sql = (
         f"SELECT r.period_date, r.operational_total, r.fondos_total, r.calculated_grand_total AS amount_clp "
@@ -367,11 +387,12 @@ def get_spend_evolution_data(
         return {"error": err, "rows": [], "series_type": "building_total"}
     rows = list(reversed(rows))
     metrics = _compute_evolution_metrics(rows, "amount_clp")
+    title = "Gasto Operacional del Edificio" if is_operational_query else "Gasto Común Total del Edificio"
     return {
         "rows": rows,
         "metrics": metrics,
         "series_type": "building_total",
-        "concept_name": "Gasto Común Total del Edificio",
+        "concept_name": title,
     }
 
 
