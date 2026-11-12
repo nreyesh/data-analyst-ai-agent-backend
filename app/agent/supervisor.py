@@ -1116,8 +1116,9 @@ def run_supervisor_turn(
         run_tree.metadata["session_id"] = active_conversation_id
         run_tree.metadata["user_uid"] = user_context.uid
         run_tree.metadata["role"] = user_context.role
-        if user_context.knowledge_domain:
-            run_tree.metadata["domain"] = user_context.knowledge_domain
+        if active_focus.last_domain:
+            run_tree.metadata["domain"] = active_focus.last_domain
+
 
     compiled = build_supervisor_graph(
         llm_client=llm_client,
