@@ -23,7 +23,7 @@ Refer strictly to the provided Data Dictionary:
 * **`tower`, `unit_number`, and `alicuota` are NOT columns on `unit_bills`!** They live in `units`. Whenever filtering or selecting `tower`, `unit_number`, or `alicuota`, ALWAYS join `units`:
   `FROM unit_bills b JOIN units u ON b.unit_code = u.unit_code WHERE u.tower = 'B' AND u.unit_number = 504` (or `WHERE b.unit_code = 'B-504'`).
 * **`period_year` and `period_month` are NOT columns on `expense_reports` or `unit_bills`!** They live in `billing_periods`. Whenever filtering or selecting `period_year` or `period_month`, ALWAYS join `billing_periods`:
-  `JOIN billing_periods p ON r.period_date = p.period_date WHERE p.period_year = 2026` (or filter directly on `r.period_date >= '2026-01-01' AND r.period_date <= '2026-12-01'`).
+  `JOIN billing_periods p ON r.period_date = p.period_date WHERE p.period_year = <target_year>` (or filter directly on `r.period_date BETWEEN '<start_date>' AND '<end_date>'`).
 
 ### Cross-Engine SQL Compatibility (PostgreSQL + SQLite)
 * When using `ROUND(value, 2)` on division expressions, cast to `NUMERIC` or multiply by `100.0` without `CAST(... AS FLOAT)` inside `ROUND(..., 2)` so PostgreSQL `ROUND(numeric, int)` and SQLite both succeed, OR use `ROUND(CAST(... AS NUMERIC), 2)`.
@@ -64,59 +64,60 @@ SELECT
     ) AS pct_change
 FROM expense_reports r
 JOIN billing_periods p ON r.period_date = p.period_date
-WHERE p.period_year = 2026
+WHERE p.period_year = <target_year> -- or filter on specific period range matching time_scope
 ORDER BY r.period_date ASC;
 ```
 
 ### Recipe 2: Year-over-Year Matching Months (`yoy_comparison`)
 ```sql
 SELECT 
-    p26.period_month,
-    r25.period_date AS baseline_period,
-    r25.operational_total AS operational_2025,
-    r25.fondos_total AS fondos_2025,
-    r25.calculated_grand_total AS total_2025,
-    r26.period_date AS comparison_period,
-    r26.operational_total AS operational_2026,
-    r26.fondos_total AS fondos_2026,
-    r26.calculated_grand_total AS total_2026,
-    (r26.calculated_grand_total - r25.calculated_grand_total) AS delta_clp,
+    curr_p.period_month,
+    base_r.period_date AS baseline_period,
+    base_r.operational_total AS operational_baseline,
+    base_r.fondos_total AS fondos_baseline,
+    base_r.calculated_grand_total AS total_baseline,
+    curr_r.period_date AS comparison_period,
+    curr_r.operational_total AS operational_comparison,
+    curr_r.fondos_total AS fondos_comparison,
+    curr_r.calculated_grand_total AS total_comparison,
+    (curr_r.calculated_grand_total - base_r.calculated_grand_total) AS delta_clp,
     ROUND(
-        CAST((r26.calculated_grand_total - r25.calculated_grand_total) * 100.0 /
-        NULLIF(r25.calculated_grand_total, 0) AS NUMERIC), 2
+        CAST((curr_r.calculated_grand_total - base_r.calculated_grand_total) * 100.0 /
+        NULLIF(base_r.calculated_grand_total, 0) AS NUMERIC), 2
     ) AS pct_change
-FROM expense_reports r26
-JOIN billing_periods p26 ON r26.period_date = p26.period_date
-JOIN billing_periods p25 ON p26.period_month = p25.period_month AND p25.period_year = 2025
-JOIN expense_reports r25 ON r25.period_date = p25.period_date
-WHERE p26.period_year = 2026
-ORDER BY p26.period_month ASC;
+FROM expense_reports curr_r
+JOIN billing_periods curr_p ON curr_r.period_date = curr_p.period_date
+JOIN billing_periods base_p ON curr_p.period_month = base_p.period_month AND base_p.period_year = <base_year>
+JOIN expense_reports base_r ON base_r.period_date = base_p.period_date
+WHERE curr_p.period_year = <comparison_year>
+ORDER BY curr_p.period_month ASC;
 ```
 
 ### Recipe 3: Variance Attribution by Category (`category_variance`)
 * **CRITICAL**: A large total volume (`SUM(calculated_subtotal)`) is **NEVER** the cause of an increase!
-* Compute the exact net difference ($\Delta = \text{peak} - \text{baseline}$) per category using a CTE:
+* Compute the exact net difference ($\Delta = \text{peak} - \text{baseline}$) per category using a CTE.
+* **Substitute `<baseline_period>` and `<peak_period>` with the verified dates from Trajectory Evaluation (e.g. `'YYYY-MM-01'`)**:
 ```sql
 WITH baseline AS (
     SELECT s.category_name, s.expense_type, SUM(s.calculated_subtotal) AS baseline_amount
     FROM expense_sections s
     JOIN expense_reports r ON s.report_id = r.id
-    WHERE r.period_date = '2026-05-01'
+    WHERE r.period_date = '<baseline_period>'
     GROUP BY s.category_name, s.expense_type
 ),
 peak AS (
     SELECT s.category_name, s.expense_type, SUM(s.calculated_subtotal) AS peak_amount
     FROM expense_sections s
     JOIN expense_reports r ON s.report_id = r.id
-    WHERE r.period_date = '2026-07-01'
+    WHERE r.period_date = '<peak_period>'
     GROUP BY s.category_name, s.expense_type
 )
 SELECT 
     COALESCE(p.category_name, b.category_name) AS category_name,
     COALESCE(p.expense_type, b.expense_type) AS expense_type,
-    '2026-05-01' AS baseline_period,
+    '<baseline_period>' AS baseline_period,
     COALESCE(b.baseline_amount, 0) AS baseline_amount,
-    '2026-07-01' AS peak_period,
+    '<peak_period>' AS peak_period,
     COALESCE(p.peak_amount, 0) AS peak_amount,
     (COALESCE(p.peak_amount, 0) - COALESCE(b.baseline_amount, 0)) AS delta_clp,
     ROUND(

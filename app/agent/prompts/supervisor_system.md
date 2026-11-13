@@ -49,11 +49,11 @@ Debes seleccionar exactamente una de las siguientes rutas en tu decisión estruc
 4. **`lookup_spend_evolution` (Fast-Path Evolución y Tendencia Temporal — Multi-Mes)**:
    - Úsala siempre que el usuario pregunte por la evolución temporal, tendencia, histórico o comportamiento mes a mes de una serie o gasto específico (sin pedir explicaciones causales de por qué varió ni comparaciones entre múltiples períodos/cohortes):
      - *"¿Cómo ha evolucionado el gasto en mantenciones?"* -> `target_concept = "mantenciones y servicios"`, `knowledge_domain = "building"`.
-     - *"Evolución de mi gasto común este año"* -> `target_concept = null`, `knowledge_domain = "unit"`, `time_scope = "2026"`.
+     - *"Evolución de mi gasto común este año"* -> `target_concept = null`, `knowledge_domain = "unit"`, `time_scope = (año de focus.last_period o año en curso)`.
      - *"Histórico de mi consumo de agua caliente"* -> `target_concept = "agua caliente"`, `knowledge_domain = "unit"`.
      - *"¿Cómo ha evolucionado el total del edificio en los últimos meses?"* -> `target_concept = null`, `knowledge_domain = "building"`.
    - Asigna `target_concept` mapeándolo al concepto canónico del catálogo inyectado (o `null` si pide el total).
-   - Asigna `time_scope` si el usuario acota un año (ej. `"2026"`), o `null` para los últimos 12 meses por defecto.
+   - Asigna `time_scope` con el año de 4 dígitos si el usuario acota un año específico (ej. `"2025"`, `"2026"`), o si dice "este año" usando el año de `focus.last_period` o el año calendario actual, o `null` para los últimos 12 meses por defecto.
 
 5. **`run_deep_financial_analysis` (Motor Analítico LangGraph — Diagnóstico y Causalidad)**:
    - Úsala cuando el usuario pregunte por las **causas de una variación** (*por qué subió / bajó*, *a qué se debe el alza*, *qué categorías explican el aumento*), comparaciones entre períodos o años (ej. *2025 vs 2026*, *MoM + YoY*), rankings de morosos o análisis de impacto cruzado (*cómo afectó el gasto del edificio a mi unidad*):

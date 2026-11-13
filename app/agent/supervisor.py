@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from pathlib import Path
 import re
@@ -106,7 +107,7 @@ def _extract_period_from_text(text: str, focus: FocusContext) -> str | None:
         if focus.last_period:
             return _previous_month_iso(focus.last_period)
 
-    # 3. Spanish month name + optional year (defaults to year of focus.last_period or 2026)
+    # 3. Spanish month name + optional year (defaults to year of focus.last_period or current calendar year)
     for month_name, month_num in SPANISH_MONTHS.items():
         if re.search(rf"\b{month_name}\b", lowered):
             m_year = re.search(r"\b(20\d{2})\b", lowered)
@@ -115,7 +116,7 @@ def _extract_period_from_text(text: str, focus: FocusContext) -> str | None:
             elif focus.last_period and re.match(r"^\d{4}-", focus.last_period):
                 year = int(focus.last_period[:4])
             else:
-                year = 2026
+                year = datetime.now().year
             return f"{year:04d}-{month_num:02d}-01"
 
     return None

@@ -649,3 +649,27 @@ def test_frontend_auth_token_store_and_ui_rendering(monkeypatch):
     assert "Evolución lista." in sent_msg.content
     assert len(sent_msg.elements) == 1
     assert sent_msg.elements[0].content == fake_png
+
+
+def test_extract_period_dynamic_timeline_resolution():
+    """Verify _extract_period_from_text resolves explicit years, context years, and dynamic fallback."""
+    from datetime import datetime
+    from backend.app.agent.supervisor import _extract_period_from_text
+    from backend.app.agent.state import FocusContext
+
+    # 1. Explicit custom years (2024, 2025)
+    f_empty = FocusContext()
+    assert _extract_period_from_text("cuánto pagué en marzo 2024", f_empty) == "2024-03-01"
+    assert _extract_period_from_text("gastos de noviembre 2025", f_empty) == "2025-11-01"
+
+    # 2. Inheriting year from focus.last_period
+    f_2025 = FocusContext(last_period="2025-10-01")
+    assert _extract_period_from_text("dame el mes de marzo", f_2025) == "2025-03-01"
+
+    # 3. Dynamic fallback to current calendar year when no context or year is given
+    current_year = datetime.now().year
+    assert _extract_period_from_text("cuánto fue en enero", f_empty) == f"{current_year}-01-01"
+
+    # 4. Relative anaphora across years
+    assert _extract_period_from_text("mes anterior", FocusContext(last_period="2025-01-01")) == "2024-12-01"
+

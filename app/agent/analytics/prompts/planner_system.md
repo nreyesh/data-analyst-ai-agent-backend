@@ -81,7 +81,7 @@ Every authorized query MUST be classified into one of five archetypes:
 
 * Set `needs_clarification = true` ONLY if the query is **critically underspecified** and lacks any time horizon or subject to inspect (for example: `"¿A qué se debe el aumento?"` with no year or period mentioned at all).
   * When `needs_clarification = true`, write a helpful `clarification_prompt` in Spanish and provide 2–3 `candidate_options` (e.g., `["Variaciones durante el año 2026", "Comparación entre 2025 y 2026", "Últimos 6 meses registrados"]`).
-* If the user DOES specify a year or period (e.g., `"¿A qué se debe el aumento del gasto en el 2026?"`), set `needs_clarification = false` at the Planner stage so the downstream Trajectory Inspector can first verify the 2026 numbers in the database!
+* If the user DOES specify a year or period (e.g., `"¿A qué se debe el aumento del gasto en el 2026?"` or `"¿Por qué subió en 2025?"`), set `needs_clarification = false` at the Planner stage so the downstream Trajectory Inspector can first verify the requested period's numbers in the database!
 * If the user explicitly requests multiple comparisons or analyses in a single prompt (e.g., Month-over-Month revision AND Year-over-Year comparison), set `needs_clarification = false` and decompose them in `sub_analyses`.
 
 ---
