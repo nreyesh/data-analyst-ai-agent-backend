@@ -52,7 +52,11 @@ from backend.app.agent.state import (
     SupervisorTurnResult,
     UserContext,
 )
-from backend.app.agent.supervisor import MAX_EPHEMERAL_MESSAGES, run_supervisor_turn
+from backend.app.agent.supervisor import (
+    MAX_EPHEMERAL_MESSAGES,
+    load_supervisor_prompt,
+    run_supervisor_turn,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -361,6 +365,90 @@ def test_supervisor_spend_evolution_and_greeting_and_system_status(
     assert t_sys.route == "check_system_status"
     assert "Diagnóstico del Sistema" in t_sys.reply
     assert len(msgs_sys) == MAX_EPHEMERAL_MESSAGES
+
+
+def test_supervisor_off_topic_general_knowledge_and_math_rejection(
+    seeded_db: Session,
+    resident_b504: UserContext,
+):
+    """Verify that general knowledge trivia and abstract math queries route to direct_response with polite rejection."""
+    # 0. Prompt contract verification: Ensure prompt strictly mentions 2+2 and general knowledge exclusion
+    prompt_text = load_supervisor_prompt()
+    assert "Preguntas Ajenas al Condominio (Cultura General, Trivia, Matemáticas Abstractas)" in prompt_text
+    assert "2+2" in prompt_text
+    assert "capital de Francia" in prompt_text
+
+    # 1. World capital / general trivia
+    mock_llm_trivia = make_mock_llm(
+        SupervisorDecision(
+            route="direct_response",
+            reasoning="Consulta de cultura general ajena al condominio.",
+            resolved_query="¿Cuál es la capital de Francia?",
+            direct_reply=(
+                "Lo siento, soy un asistente especializado exclusivamente en los gastos comunes "
+                "y la administración financiera de este condominio. No puedo responder consultas "
+                "de conocimiento general o temas ajenos al edificio. ¿Hay alguna consulta sobre tus "
+                "boletas, consumos o gastos del condominio en la que te pueda orientar?"
+            ),
+        )
+    )
+    t_trivia, _, f_trivia = run_supervisor_turn(
+        user_message="¿Cuál es la capital de Francia?",
+        user_context=resident_b504,
+        llm_client=mock_llm_trivia,
+        http_client=seeded_db,
+    )
+    assert t_trivia.route == "direct_response"
+    assert "especializado exclusivamente en los gastos comunes" in t_trivia.reply
+    assert "capital de Francia" not in t_trivia.reply
+    assert f_trivia.last_domain is None
+
+    # 2. Abstract math (2+2)
+    mock_llm_math = make_mock_llm(
+        SupervisorDecision(
+            route="direct_response",
+            reasoning="Cálculo matemático abstracto no financiero.",
+            resolved_query="¿Cuánto es 2+2?",
+            direct_reply=(
+                "Lo siento, soy un asistente especializado exclusivamente en los gastos comunes "
+                "y la administración financiera de este condominio. No puedo resolver cálculos "
+                "matemáticos abstractos o temas ajenos al edificio. ¿Hay alguna consulta sobre tus "
+                "gastos comunes en la que te pueda orientar?"
+            ),
+        )
+    )
+    t_math, _, _ = run_supervisor_turn(
+        user_message="¿Cuánto es 2+2?",
+        user_context=resident_b504,
+        llm_client=mock_llm_math,
+        http_client=seeded_db,
+    )
+    assert t_math.route == "direct_response"
+    assert "especializado exclusivamente en los gastos comunes" in t_math.reply
+    assert "4" not in t_math.reply.split()  # Does not solve 2+2
+
+    # 3. Operational work status out of scope
+    mock_llm_work = make_mock_llm(
+        SupervisorDecision(
+            route="direct_response",
+            reasoning="Consulta de avance físico de obra ajena a la contabilidad.",
+            resolved_query="¿En qué estado de avance está la impermeabilización?",
+            direct_reply=(
+                "Mi función como asistente es exclusivamente financiera y contable (gastos comunes, "
+                "notas de cobro y variación de costos). No dispongo de información sobre el avance "
+                "físico de obras o proyectos; te sugiero consultar directamente con la Administración."
+            ),
+        )
+    )
+    t_work, _, _ = run_supervisor_turn(
+        user_message="¿En qué estado de avance está la impermeabilización?",
+        user_context=resident_b504,
+        llm_client=mock_llm_work,
+        http_client=seeded_db,
+    )
+    assert t_work.route == "direct_response"
+    assert "exclusivamente financiera y contable" in t_work.reply
+    assert "Administración" in t_work.reply
 
 
 # ============================================================================
