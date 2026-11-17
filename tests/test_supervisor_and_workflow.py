@@ -673,3 +673,71 @@ def test_extract_period_dynamic_timeline_resolution():
     # 4. Relative anaphora across years
     assert _extract_period_from_text("mes anterior", FocusContext(last_period="2025-01-01")) == "2024-12-01"
 
+
+def test_supervisor_direct_response_out_of_domain_boundary(
+    seeded_db: Session,
+    resident_b504: UserContext,
+):
+    """Verify out-of-domain inquiries preserve direct_response without forced analytics hijacking."""
+    out_of_domain_reply = (
+        "No dispongo de información sobre el estado de avance físico ni plazos de ejecución "
+        "de las obras de impermeabilización. Mi función como asistente es exclusivamente "
+        "financiera y contable. Para conocer el avance operativo, te sugiero consultar directamente "
+        "a la Administración del condominio."
+    )
+    mock_llm_ood = make_mock_llm(
+        SupervisorDecision(
+            route="direct_response",
+            reasoning="Consulta sobre avance operativo de obras físicas, fuera de alcance financiero.",
+            resolved_query="¿En qué estado de avance está el tema de la impermeabilización?",
+            direct_reply=out_of_domain_reply,
+        )
+    )
+
+    turn_res, msgs, focus = run_supervisor_turn(
+        user_message="¿En qué estado de avance está el tema de la impermeabilización?",
+        user_context=resident_b504,
+        llm_client=mock_llm_ood,
+        http_client=seeded_db,
+    )
+
+    assert turn_res.route == "direct_response"
+    assert "estado de avance físico" in turn_res.reply
+    assert "exclusivamente financiera y contable" in turn_res.reply
+    assert turn_res.chart_base64 is None
+
+
+def test_analytics_workflow_bypasses_visualization_when_not_required():
+    """Verify analytics workflow skips visualizer/sandbox when plan.requires_visualization is false."""
+    from backend.app.agent.analytics.workflow import route_after_sql_gateway
+    from backend.app.agent.analytics.state import IntentPlan
+
+    plan_no_vis = IntentPlan(
+        is_authorized_query=True,
+        analysis_goal="Explicar alza junio y octubre",
+        analysis_type="variance_driver",
+        relevant_tables=["unit_bills"],
+        requires_visualization=False,
+    )
+    state_no_vis = {
+        "intent_plan": plan_no_vis,
+        "sql_results": [{"item_name": "Arriendo Sala", "amount": 30000}],
+        "gateway_unavailable": False,
+    }
+    assert route_after_sql_gateway(state_no_vis) == "synthesizer"
+
+    plan_vis = IntentPlan(
+        is_authorized_query=True,
+        analysis_goal="Evolución anual 2026",
+        analysis_type="time_series_trend",
+        relevant_tables=["unit_bills"],
+        requires_visualization=True,
+    )
+    state_vis = {
+        "intent_plan": plan_vis,
+        "sql_results": [{"item_name": "Gasto Común", "amount": 100000}],
+        "gateway_unavailable": False,
+    }
+    assert route_after_sql_gateway(state_vis) == "visualizer"
+
+

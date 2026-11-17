@@ -312,6 +312,26 @@ def planner_node(state: DataAnalystState, client: genai.Client | None = None) ->
 # ============================================================================
 
 
+def _build_trajectory_time_filter(time_scope: str | None) -> str:
+    """Build SQL condition restricting billing_periods to the requested time scope."""
+    if not time_scope:
+        return ""
+    clean_scope = time_scope.strip()
+    m_date = re.match(r"^(20\d{2}-\d{2}(?:-\d{2})?)$", clean_scope)
+    if m_date:
+        iso_val = m_date.group(1)
+        if len(iso_val) == 7:
+            iso_val += "-01"
+        return f"p.period_date >= '{iso_val}'"
+    years = [int(y) for y in re.findall(r"\b(20\d{2})\b", clean_scope)]
+    if len(years) == 1:
+        return f"p.period_year = {years[0]}"
+    if len(years) > 1:
+        years_list = ", ".join(str(y) for y in sorted(set(years)))
+        return f"p.period_year IN ({years_list})"
+    return ""
+
+
 def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
     """Execute Hop 1 macro query on expense_reports (or unit_bills joined with units and billing_periods)."""
     target_unit = state.get("target_unit")
@@ -323,8 +343,14 @@ def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
         tower = tower or plan.unit_tower
         number = number or plan.unit_number
 
+    time_filter = _build_trajectory_time_filter(plan.time_scope if plan else None)
+
     if tower and number is not None:
         safe_tower = tower.strip().upper().replace("'", "")
+        where_conds = [f"u.tower = '{safe_tower}'", f"u.unit_number = {int(number)}"]
+        if time_filter:
+            where_conds.append(time_filter)
+        where_str = " AND ".join(where_conds)
         sql = (
             "SELECT b.period_date, p.period_year, p.period_month, "
             "b.calculated_dept_subtotal, b.calculated_consumo_total, "
@@ -332,25 +358,30 @@ def trajectory_inspector_node(state: DataAnalystState) -> dict[str, Any]:
             "FROM unit_bills b "
             "JOIN units u ON b.unit_code = u.unit_code "
             "JOIN billing_periods p ON b.period_date = p.period_date "
-            f"WHERE u.tower = '{safe_tower}' AND u.unit_number = {int(number)} ORDER BY b.period_date ASC"
+            f"WHERE {where_str} ORDER BY b.period_date ASC"
         )
     elif target_unit:
         safe_unit = target_unit.strip().upper().replace("'", "")
+        where_conds = [f"b.unit_code = '{safe_unit}'"]
+        if time_filter:
+            where_conds.append(time_filter)
+        where_str = " AND ".join(where_conds)
         sql = (
             "SELECT b.period_date, p.period_year, p.period_month, "
             "b.calculated_dept_subtotal, b.calculated_consumo_total, "
             "b.calculated_unit_subtotal, b.calculated_total_month AS calculated_grand_total "
             "FROM unit_bills b "
             "JOIN billing_periods p ON b.period_date = p.period_date "
-            f"WHERE b.unit_code = '{safe_unit}' ORDER BY b.period_date ASC"
+            f"WHERE {where_str} ORDER BY b.period_date ASC"
         )
     else:
+        where_str = f"WHERE {time_filter} " if time_filter else ""
         sql = (
             "SELECT r.period_date, p.period_year, p.period_month, "
             "r.operational_total, r.fondos_total, r.calculated_grand_total "
             "FROM expense_reports r "
             "JOIN billing_periods p ON r.period_date = p.period_date "
-            "ORDER BY r.period_date ASC"
+            f"{where_str}ORDER BY r.period_date ASC"
         )
 
     rows, error_msg = query_data_gateway(sql=sql)

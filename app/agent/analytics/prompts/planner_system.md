@@ -36,7 +36,8 @@ Identify if the user is asking about an individual apartment unit or building-wi
   1. **`building`**: Questions about general community expenses, operational totals, building sections/items (e.g. *"Evolución de mantenciones en 2026"*).
      - Tables: `["billing_periods", "expense_reports", "expense_sections"]` (and optionally `"expense_items"`).
   2. **`unit`**: Questions about a specific unit's bill, personal hot water consumption volume ($m^3$), or individual charges without asking for building root causes (e.g. *"Evolución de gastos de la unidad B-504"*, *"Evolución del gasto común para el depto 506b"*).
-     - **UNIT-FIRST FOCUS GUARD**: Whenever an individual apartment unit is referenced (e.g. `"506B"`, `"depto 506b"`, `"B-504"`), ALWAYS default to `knowledge_domain: "unit"` with a SINGLE focused sub-analysis on that unit. Do NOT produce macro building sub-analyses or multi-panel building charts unless the prompt explicitly asks to compare with the full building or explicitly asks for macro building operational causes.
+     - **UNIT-FIRST FOCUS GUARD**: Whenever an individual apartment unit is referenced (e.g. `"506B"`, `"depto 506b"`, `"B-504"`), ALWAYS default to `knowledge_domain: "unit"`. Do NOT produce macro building sub-analyses or multi-panel building charts unless the prompt explicitly asks to compare with the full building or explicitly asks for macro building operational causes.
+     - **MULTI-PERIOD UNIT RETENTION**: If the user prompt references multiple specific periods for the unit (e.g. `"en junio y octubre"`, `"en agosto y septiembre"`), you MUST populate `sub_analyses` with decomposition tasks for EACH referenced period (up to 3 periods), ensuring downstream SQL queries retrieve the details for all requested months.
      - Tables: `["units", "billing_periods", "unit_bills", "unit_bill_concepts", "unit_bill_consumptions", "unit_bill_charges"]`.
   3. **`cross_domain`**: Inquiries that EXPLICITLY ask why an apartment's expense increased due to building root causes, or explicitly request comparing the unit with the full building's operational totals (e.g. *"¿Por qué subió mi gasto común en el 504B en relación al edificio?"*, *"Compara el depto 504B con los gastos generales del edificio"*).
      - Tables: `["units", "billing_periods", "unit_bills", "unit_bill_concepts", "unit_bill_consumptions", "expense_reports", "expense_sections"]`.
@@ -95,10 +96,16 @@ Users frequently request compound analyses in a single prompt (e.g., *"Haz una r
 
 ---
 
-## 6. Visualization Guidelines
+## 6. Visualization Guidelines (Principle of Proportionality)
 
-* Set `requires_visualization = true` for `variance_driver`, `time_series_trend`, `composition_share`, and `comparative_cohort`, or when `len(sub_analyses) > 1` or explicitly requested.
-* Set `requires_visualization = false` for `scalar_lookup`.
+* Set `requires_visualization = true` ONLY when:
+  1. The user explicitly requests a chart or visual comparison (e.g. *"muéstrame un gráfico"*, *"haz un gráfico de esto"*).
+  2. The analysis covers an extended multi-month time series (`time_series_trend` across 4+ months, or full-year `time_scope` like `"2026"`).
+  3. The query is a macro building multi-category comparative breakdown (`comparative_cohort` or building-wide multi-section share).
+* Set `requires_visualization = false` when:
+  1. The query is a focused follow-up or causal diagnostic of specific discrete months (e.g., *"¿Por qué subió mi gasto en junio y octubre?"*, *"¿A qué se debe el cobro extra en agosto?"*).
+  2. The query is a scalar lookup or simple snapshot breakdown (`scalar_lookup`).
+  3. Generating a chart does not add substantial analytical value beyond a direct, clear text explanation.
 * Recommended `suggested_chart_type`:
   * `'line'`: For `time_series_trend` or multi-month `variance_driver` trajectories.
   * `'bar'`: For net delta ($\Delta$) comparisons or `comparative_cohort`.

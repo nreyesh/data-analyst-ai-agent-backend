@@ -720,19 +720,6 @@ def supervisor_router_node(
             if not decision.resolved_query:
                 decision.resolved_query = user_msg
 
-            # Guard: never allow LLM to return direct_response greeting for a non-greeting query
-            if decision.route == "direct_response":
-                return {
-                    "decision": SupervisorDecision(
-                        route="run_deep_financial_analysis",
-                        reasoning="Recuperación de direct_response para consulta no saludo.",
-                        resolved_query=user_msg,
-                        knowledge_domain=decision.knowledge_domain or focus.last_domain or "building",
-                        unit_code=decision.unit_code or focus.last_unit,
-                        period_date=decision.period_date,
-                    )
-                }
-
             decision = _apply_entity_and_scope_guards(decision, user_msg, user_context, focus)
             return {"decision": decision}
         except Exception as exc:

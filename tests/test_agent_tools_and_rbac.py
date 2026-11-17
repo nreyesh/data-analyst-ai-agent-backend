@@ -308,3 +308,59 @@ def test_rbac_enforcement_across_all_tools(
     assert "error" not in adm_sys
     adm_bldg = lookup_building_summary(user_context=admin_user, client=seeded_db)
     assert "error" not in adm_bldg
+
+
+def test_trajectory_inspector_time_scope_filtering():
+    """Verify trajectory inspector restricts SQL queries to the plan's time_scope."""
+    from unittest.mock import patch
+    from backend.app.agent.analytics.nodes import (
+        _build_trajectory_time_filter,
+        trajectory_inspector_node,
+    )
+    from backend.app.agent.analytics.state import IntentPlan
+
+    # 1. Helper function unit tests
+    assert _build_trajectory_time_filter("2026") == "p.period_year = 2026"
+    assert _build_trajectory_time_filter("2025 vs 2026") == "p.period_year IN (2025, 2026)"
+    assert _build_trajectory_time_filter("2025-2026") == "p.period_year IN (2025, 2026)"
+    assert _build_trajectory_time_filter("2026-06") == "p.period_date >= '2026-06-01'"
+    assert _build_trajectory_time_filter(None) == ""
+    assert _build_trajectory_time_filter("") == ""
+
+    # 2. Node execution with unit tower/number and time_scope
+    captured_sqls = []
+
+    def mock_gateway(sql: str):
+        captured_sqls.append(sql)
+        return [{"period_date": "2026-06-01", "calculated_grand_total": 149077}], None
+
+    with patch("backend.app.agent.analytics.nodes.query_data_gateway", side_effect=mock_gateway):
+        plan_scoped = IntentPlan(
+            is_authorized_query=True,
+            analysis_goal="Variance analysis",
+            analysis_type="variance_driver",
+            relevant_tables=["unit_bills"],
+            time_scope="2026",
+            unit_tower="B",
+            unit_number=504,
+            target_unit="B-504",
+        )
+        res = trajectory_inspector_node({"intent_plan": plan_scoped})
+        assert len(captured_sqls) == 1
+        assert "p.period_year = 2026" in captured_sqls[0]
+        assert "u.tower = 'B'" in captured_sqls[0]
+        assert "u.unit_number = 504" in captured_sqls[0]
+        assert len(res["macro_trajectory"]) == 1
+
+        # Building query with time_scope
+        plan_bldg = IntentPlan(
+            is_authorized_query=True,
+            analysis_goal="Building variance",
+            analysis_type="variance_driver",
+            relevant_tables=["expense_reports"],
+            time_scope="2025 vs 2026",
+        )
+        res_bldg = trajectory_inspector_node({"intent_plan": plan_bldg})
+        assert len(captured_sqls) == 2
+        assert "p.period_year IN (2025, 2026)" in captured_sqls[1]
+
