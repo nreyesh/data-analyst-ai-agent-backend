@@ -38,6 +38,7 @@ class AnalyticsSettings(BaseSettings):
     fallback_models: list[str] = Field(
         default_factory=lambda: [
             "gemini-3.1-flash-lite",
+            "gemma-4-31b-it",
             "gemini-3.6-flash",
             "gemini-3.7-flash",
             "gemini-3.8-flash",
